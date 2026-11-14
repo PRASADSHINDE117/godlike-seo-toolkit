@@ -16,6 +16,9 @@ Tests 10 controlled scenarios verifying:
 
 import unittest
 from godlike_seo.models import (
+    CanonicalState,
+    CheckResult,
+    CheckStatus,
     PageData,
     PageType,
     HeadingData,
@@ -334,17 +337,18 @@ class TestSEOAuditEngine(unittest.TestCase):
             self.assertIn("All Evaluated Pages", wb.sheetnames)
             ws = wb["All Evaluated Pages"]
 
-            # Check headers
-            headers = [ws.cell(row=1, column=c).value for c in range(1, 18)]
+            # Check headers (18 columns in 3.1)
+            headers = [ws.cell(row=1, column=c).value for c in range(1, 19)]
             self.assertIn("Is Indexable", headers)
             self.assertIn("Indexability Reason", headers)
+            self.assertIn("Canonical State", headers)
             self.assertIn("Internal Inlinks", headers)
             self.assertIn("Internal Outlinks", headers)
             self.assertIn("External Outlinks", headers)
 
             # Check rows
-            row2_vals = [ws.cell(row=2, column=c).value for c in range(1, 18)]
-            row3_vals = [ws.cell(row=3, column=c).value for c in range(1, 18)]
+            row2_vals = [ws.cell(row=2, column=c).value for c in range(1, 19)]
+            row3_vals = [ws.cell(row=3, column=c).value for c in range(1, 19)]
 
             # Row 2 (Home): Indexable: Yes, Internal Inlinks: 1, Internal Outlinks: 1, External Outlinks: 1
             idx_indexable = headers.index("Is Indexable")
@@ -364,6 +368,226 @@ class TestSEOAuditEngine(unittest.TestCase):
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    # Scenario 13: Canonical State Taxonomy & Missing Canonical Truthfulness
+    def test_scenario_13_canonical_taxonomy_truthfulness(self):
+        from godlike_seo.crawler import SEOCrawler, CrawlerConfig
+
+        crawler = SEOCrawler(config=CrawlerConfig())
+
+        # Subtest 1: Page with no canonical tag declared
+        html_no_canon = "<html><head><title>No Canonical</title></head><body>Content</body></html>"
+        page_no_canon, _ = crawler._extract_page_data(
+            url="https://example.com/page",
+            final_url="https://example.com/page",
+            status_code=200,
+            headers={},
+            html=html_no_canon,
+            response_time_ms=100.0,
+            redirect_chain=[],
+            depth=0,
+        )
+        self.assertEqual(page_no_canon.canonical_state, CanonicalState.MISSING)
+        self.assertFalse(page_no_canon.is_self_canonical)
+        self.assertIsNone(page_no_canon.canonical_url)
+        self.assertIn("no canonical declared - Google defaults to URL", page_no_canon.indexability_reason)
+        self.assertNotIn("self-canonical", page_no_canon.indexability_reason)
+
+        # Subtest 2: Page with explicit self-referencing canonical
+        html_self_canon = '<html><head><link rel="canonical" href="https://example.com/page"></head><body>Content</body></html>'
+        page_self_canon, _ = crawler._extract_page_data(
+            url="https://example.com/page",
+            final_url="https://example.com/page",
+            status_code=200,
+            headers={},
+            html=html_self_canon,
+            response_time_ms=100.0,
+            redirect_chain=[],
+            depth=0,
+        )
+        self.assertEqual(page_self_canon.canonical_state, CanonicalState.SELF_REFERENCING)
+        self.assertTrue(page_self_canon.is_self_canonical)
+        self.assertEqual(page_self_canon.canonical_url, "https://example.com/page")
+
+        # Subtest 3: Multiple conflicting canonical tags
+        html_multi_canon = '<html><head><link rel="canonical" href="https://example.com/a"><link rel="canonical" href="https://example.com/b"></head><body>Content</body></html>'
+        page_multi_canon, _ = crawler._extract_page_data(
+            url="https://example.com/page",
+            final_url="https://example.com/page",
+            status_code=200,
+            headers={},
+            html=html_multi_canon,
+            response_time_ms=100.0,
+            redirect_chain=[],
+            depth=0,
+        )
+        self.assertEqual(page_multi_canon.canonical_state, CanonicalState.MULTIPLE)
+
+    # Scenario 14: Malformed location URL / route segment detector
+    def test_scenario_14_malformed_location_route_detector(self):
+        page_broken_route = PageData(
+            url="https://tental.versatyle.in/rent/undefined",
+            title="Rent in undefined - Tental",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues = self.detector._check_malformed_urls(page_broken_route)
+        self.assertTrue(len(issues) >= 1)
+        issue = issues[0]
+        self.assertEqual(issue.issue_id, "MALFORMED_LOCATION_URL")
+        self.assertEqual(issue.severity, IssueSeverity.HIGH)
+        self.assertIn("undefined", issue.evidence)
+
+    # Scenario 15: Staging environment intent with sitewide noindex
+    def test_scenario_15_staging_environment_noindex_handling(self):
+        pages = [
+            PageData(
+                url=f"https://tental.versatyle.in/page-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                x_robots_tag="noindex, nofollow",
+                is_indexable=False,
+                word_count=200,
+            )
+            for i in range(5)
+        ]
+        crawl_result = CrawlResult(start_url="https://tental.versatyle.in/", pages=pages, environment="staging")
+        report_gen = ReportGenerator(environment="staging")
+        report = report_gen.generate_report(crawl_result, environment="staging")
+
+        self.assertEqual(report.audit_status, "STAGING_PROTECTED")
+        self.assertEqual(report.environment_intent, "staging")
+        # No 30-point deduction for staging protection
+        noindex_deductions = [d for d in report.all_deductions if "noindex" in d.reason.lower() or "SITEWIDE" in d.rule_title]
+        self.assertEqual(len(noindex_deductions), 0)
+
+    # Scenario 16: Production environment intent with sitewide noindex
+    def test_scenario_16_production_sitewide_noindex_release_blocker(self):
+        pages = [
+            PageData(
+                url=f"https://production-app.com/page-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                x_robots_tag="noindex",
+                is_indexable=False,
+                word_count=200,
+            )
+            for i in range(5)
+        ]
+        crawl_result = CrawlResult(start_url="https://production-app.com/", pages=pages, environment="production")
+        report_gen = ReportGenerator(environment="production")
+        report = report_gen.generate_report(crawl_result, environment="production")
+
+        self.assertEqual(report.audit_status, "INDEXATION_BLOCKED")
+        self.assertEqual(report.overall_score, 0.0)
+        self.assertIn("CRITICAL RELEASE BLOCKER", report.status_message)
+
+    # Scenario 17: Orphan check NOT_APPLICABLE when zero indexable pages exist
+    def test_scenario_17_orphan_check_not_applicable_when_zero_indexable(self):
+        pages = [
+            PageData(
+                url="https://example.com/",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                is_indexable=False,  # Blocked by noindex
+                word_count=300,
+                internal_links=[LinkData(href="https://example.com/page-1")],
+            ),
+            PageData(
+                url="https://example.com/page-1",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                is_indexable=False,  # Blocked by noindex
+                word_count=200,
+            ),
+        ]
+        crawl_result = CrawlResult(start_url="https://example.com/", pages=pages)
+        report = self.report_gen.generate_report(crawl_result)
+
+        # Find LINK-001 in check ledger
+        orphan_checks = [r for r in report.check_ledger if r.rule_id == "LINK-001"]
+        self.assertEqual(len(orphan_checks), 1)
+        self.assertEqual(orphan_checks[0].status, CheckStatus.NOT_APPLICABLE)
+
+    # Scenario 18: Link graph alias resolution and edge reconciliation
+    def test_scenario_18_link_graph_alias_resolution(self):
+        home = PageData(
+            url="https://example.com",
+            final_url="https://example.com/",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            internal_links=[
+                LinkData(href="https://example.com/support", anchor_text="Help Support"),
+                LinkData(href="https://example.com/support/", anchor_text="Support Link"),
+            ]
+        )
+        # /support redirects to /login
+        support = PageData(
+            url="https://example.com/support",
+            final_url="https://example.com/login",
+            status_code=302,
+            has_html=False,
+            page_type=PageType.AUTHENTICATION,
+        )
+        login = PageData(
+            url="https://example.com/login",
+            final_url="https://example.com/login",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.AUTHENTICATION,
+        )
+        link_audit = self.link_analyzer.analyze([home, support, login])
+        # The login page node should resolve both inbound links
+        login_stats = link_audit["page_stats"]["https://example.com/login"]
+        self.assertEqual(login_stats.inlinks_count, 2)
+        self.assertEqual(login_stats.unique_inlinks_count, 1)
+
+    # Scenario 19: Calibrated rule penalties
+    def test_scenario_19_calibrated_rules(self):
+        # 1. Multiple H1 tags should be INFORMATIONAL
+        p_multi_h1 = PageData(
+            url="https://example.com/multi-h1",
+            headings=[HeadingData(level=1, text="H1 One"), HeadingData(level=1, text="H1 Two")],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues = self.detector._check_headings(p_multi_h1, {})
+        multi_issue = [i for i in issues if i.issue_id == "MULTIPLE_H1_TAGS"]
+        self.assertEqual(len(multi_issue), 1)
+        self.assertEqual(multi_issue[0].severity, IssueSeverity.INFORMATIONAL)
+
+        # 2. Missing H1 should be MEDIUM (not HIGH)
+        p_no_h1 = PageData(
+            url="https://example.com/no-h1",
+            headings=[],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues_no_h1 = self.detector._check_headings(p_no_h1, {})
+        missing_h1 = [i for i in issues_no_h1 if i.issue_id == "MISSING_H1_TAG"]
+        self.assertEqual(len(missing_h1), 1)
+        self.assertEqual(missing_h1[0].severity, IssueSeverity.MEDIUM)
+
+        # 3. Content with 100 words should be INFORMATIONAL opportunity (not penalized)
+        p_thin = PageData(
+            url="https://example.com/catalog",
+            word_count=100,
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        content_issues = self.detector._check_content_quality(p_thin, {})
+        opp_issue = [i for i in content_issues if i.issue_id == "CONTENT_DEPTH_OPPORTUNITY"]
+        self.assertEqual(len(opp_issue), 1)
+        self.assertEqual(opp_issue[0].severity, IssueSeverity.INFORMATIONAL)
 
 
 if __name__ == "__main__":

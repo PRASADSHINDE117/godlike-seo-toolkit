@@ -18,10 +18,11 @@ import asyncio
 import hashlib
 import logging
 import re
+import ssl
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 import xml.etree.ElementTree as ET
@@ -41,6 +42,7 @@ except Exception:
     _ua = None
 
 from godlike_seo.models import (
+    CanonicalState,
     CrawlResult,
     CrawlStatus,
     HeadingData,
@@ -60,11 +62,13 @@ from godlike_seo.utils.url_normalizer import normalize_url, are_urls_equivalent
 
 logger = logging.getLogger(__name__)
 
+GODLIKE_USER_AGENT = "GodlikeSEO/3.1 (+https://github.com/PRASADSHINDE117/godlike-seo-toolkit; bot@godlike-seo.dev)"
+
 DEFAULT_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    GODLIKE_USER_AGENT,
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ]
 
 
@@ -81,11 +85,12 @@ class CrawlerConfig:
     parse_sitemap: bool = True
     user_agent: Optional[str] = None
     proxy: Optional[str] = None
-    verify_ssl: bool = False
+    verify_ssl: bool = True  # P0: Certificate verification enabled by default
+    environment: Optional[str] = None  # 'production', 'staging', 'development', 'unknown'
 
 
 class SEOCrawler:
-    """Godlike SEO Crawler Engine 2.0."""
+    """Godlike SEO Crawler Engine 3.1."""
 
     def __init__(
         self,
@@ -96,6 +101,7 @@ class SEOCrawler:
         self.config = config or CrawlerConfig()
         self.auth_config = auth_config
         self.progress_callback = progress_callback
+        self._user_agent: str = self.config.user_agent or GODLIKE_USER_AGENT
 
         self._auth_cookies: Dict[str, str] = {}
         self._auth_headers: Dict[str, str] = {}
@@ -110,15 +116,8 @@ class SEOCrawler:
         self._start_time: float = 0.0
 
     def _get_user_agent(self) -> str:
-        if self.config.user_agent:
-            return self.config.user_agent
-        if _ua:
-            try:
-                return _ua.random
-            except Exception:
-                pass
-        import random
-        return random.choice(DEFAULT_USER_AGENTS)
+        """Return a stable, consistent User-Agent across all audit requests and robots checks."""
+        return self._user_agent
 
     def _is_same_domain(self, url: str) -> bool:
         """Check if URL belongs to the target domain."""
@@ -246,9 +245,14 @@ class SEOCrawler:
         response_time_ms: float,
         redirect_chain: List[RedirectHop],
         depth: int,
+        rendered_dom: Optional[str] = None,
+        render_status: str = "static_http",
     ) -> Tuple[PageData, List[str]]:
         """Extract rich SEO data and raw DOM evidence."""
-        soup = BeautifulSoup(html, "lxml")
+        try:
+            soup = BeautifulSoup(html, "lxml")
+        except Exception:
+            soup = BeautifulSoup(html, "html.parser")
 
         # Title
         title_tags = soup.find_all("title")
@@ -267,18 +271,58 @@ class SEOCrawler:
         if meta_robots_tag:
             meta_robots = meta_robots_tag.get("content", "").strip()
 
-        # Canonical
+        # Comprehensive Canonical Directive Extraction & Taxonomy (P0 Fix)
+        canonical_tags = soup.find_all("link", attrs={"rel": re.compile(r"^canonical$", re.I)})
         canonical_url = None
         canonical_raw_snippet = None
-        canonical_tag = soup.find("link", attrs={"rel": re.compile(r"^canonical$", re.I)})
-        if canonical_tag and canonical_tag.get("href"):
-            canonical_url = normalize_url(urljoin(final_url, canonical_tag.get("href").strip()))
-            canonical_raw_snippet = str(canonical_tag)[:200]
+        canonical_state = CanonicalState.MISSING
+        is_self_canonical = False
+
+        if len(canonical_tags) > 1:
+            canonical_state = CanonicalState.MULTIPLE
+            canonical_url = normalize_url(urljoin(final_url, (canonical_tags[0].get("href") or "").strip()))
+            canonical_raw_snippet = "; ".join(str(t)[:100] for t in canonical_tags[:2])
+            is_self_canonical = False
+        elif len(canonical_tags) == 1:
+            raw_href = (canonical_tags[0].get("href") or "").strip()
+            canonical_raw_snippet = str(canonical_tags[0])[:200]
+            if not raw_href:
+                canonical_state = CanonicalState.INVALID
+            elif not raw_href.startswith(("http://", "https://", "/")):
+                canonical_state = CanonicalState.INVALID
+                canonical_url = raw_href
+            elif not raw_href.startswith(("http://", "https://")):
+                canonical_url = normalize_url(urljoin(final_url, raw_href))
+                if are_urls_equivalent(canonical_url, final_url):
+                    canonical_state = CanonicalState.RELATIVE
+                    is_self_canonical = True
+                else:
+                    canonical_state = CanonicalState.CROSS_URL
+                    is_self_canonical = False
+            else:
+                canonical_url = normalize_url(raw_href)
+                if are_urls_equivalent(canonical_url, final_url):
+                    canonical_state = CanonicalState.SELF_REFERENCING
+                    is_self_canonical = True
+                else:
+                    canonical_state = CanonicalState.CROSS_URL
+                    is_self_canonical = False
         elif "link" in headers and 'rel="canonical"' in headers["link"]:
             match = re.search(r'<([^>]+)>;\s*rel="canonical"', headers["link"], re.I)
             if match:
-                canonical_url = normalize_url(urljoin(final_url, match.group(1).strip()))
+                raw_href = match.group(1).strip()
+                canonical_url = normalize_url(urljoin(final_url, raw_href))
                 canonical_raw_snippet = headers["link"][:200]
+                if are_urls_equivalent(canonical_url, final_url):
+                    canonical_state = CanonicalState.SELF_REFERENCING
+                    is_self_canonical = True
+                else:
+                    canonical_state = CanonicalState.CROSS_URL
+                    is_self_canonical = False
+        else:
+            canonical_state = CanonicalState.MISSING
+            canonical_url = None
+            is_self_canonical = False
 
         # Robust Viewport Meta Extraction
         viewport_meta = None
@@ -495,13 +539,20 @@ class SEOCrawler:
             is_indexable = False
             reasons.append(f"Blocked by HTTP {status_code} Redirect")
 
-        is_self_canonical = True
-        if canonical_url and not are_urls_equivalent(canonical_url, final_url):
-            is_self_canonical = False
-            reasons.append(f"Non-self canonical points to: '{canonical_url}'")
+        if canonical_state == CanonicalState.CROSS_URL and canonical_url:
+            reasons.append(f"Canonical points to: '{canonical_url}'")
+        elif canonical_state == CanonicalState.MULTIPLE:
+            reasons.append("Conflicting multiple canonical tags")
+        elif canonical_state == CanonicalState.INVALID:
+            reasons.append("Invalid or malformed canonical URL")
 
         if is_indexable and not reasons:
-            indexability_reason = "Indexable (200 OK, no blocking directives, self-canonical)"
+            if canonical_state == CanonicalState.SELF_REFERENCING:
+                indexability_reason = "Indexable (200 OK, explicit self-referencing canonical)"
+            elif canonical_state == CanonicalState.RELATIVE:
+                indexability_reason = "Indexable (200 OK, relative self-canonical)"
+            else:
+                indexability_reason = "Indexable (200 OK, no canonical declared - Google defaults to URL)"
         else:
             indexability_reason = "; ".join(reasons) if reasons else "Non-indexable"
 
@@ -538,6 +589,7 @@ class SEOCrawler:
             meta_robots=meta_robots,
             canonical_url=canonical_url,
             canonical_raw_snippet=canonical_raw_snippet,
+            canonical_state=canonical_state,
             viewport_meta=viewport_meta,
             viewport_raw_snippet=viewport_raw_snippet,
             has_viewport=has_viewport,
@@ -563,10 +615,39 @@ class SEOCrawler:
             indexability_reason=indexability_reason,
             x_robots_tag=x_robots,
             is_self_canonical=is_self_canonical,
+            rendered_dom=rendered_dom,
+            render_status=render_status,
             found_in_sitemap=(norm_final in self._sitemap_urls),
         )
 
         return page_data, discovered_urls
+
+    async def _render_page_playwright(self, url: str) -> Optional[Tuple[str, str]]:
+        """Render page using Playwright headless Chromium for dynamic/client-rendered content."""
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent=self._user_agent,
+                    ignore_https_errors=not self.config.verify_ssl,
+                )
+                if self._auth_cookies:
+                    pw_cookies = [{"name": k, "value": v, "url": url} for k, v in self._auth_cookies.items()]
+                    try:
+                        await context.add_cookies(pw_cookies)
+                    except Exception:
+                        pass
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await asyncio.sleep(0.8)
+                rendered_html = await page.content()
+                final_url = page.url
+                await browser.close()
+                return rendered_html, final_url
+        except Exception as e:
+            logger.debug("Playwright rendering skipped/failed for %s: %s", url, e)
+            return None
 
     async def _crawl_url_http(
         self,
@@ -630,6 +711,18 @@ class SEOCrawler:
                     return page, []
 
                 html = await resp.text(errors="replace")
+
+                render_status = "static_http"
+                rendered_dom = None
+                if self.config.render_js and resp.status == 200:
+                    pw_result = await self._render_page_playwright(url)
+                    if pw_result:
+                        rendered_dom, pw_final = pw_result
+                        html = rendered_dom
+                        if pw_final:
+                            final_url = pw_final
+                        render_status = "rendered_playwright"
+
                 return self._extract_page_data(
                     url=url,
                     final_url=final_url,
@@ -639,6 +732,8 @@ class SEOCrawler:
                     response_time_ms=elapsed_ms,
                     redirect_chain=redirect_chain,
                     depth=depth,
+                    rendered_dom=rendered_dom,
+                    render_status=render_status,
                 )
 
         except asyncio.TimeoutError:
@@ -656,7 +751,8 @@ class SEOCrawler:
         result = CrawlResult(
             start_url=self._root_url,
             domain=self._target_domain,
-            started_at=datetime.utcnow().isoformat(),
+            environment=self.config.environment,
+            started_at=datetime.now(timezone.utc).isoformat(),
         )
 
         # Automated Login via Playwright if credentials provided
@@ -666,7 +762,16 @@ class SEOCrawler:
             if self.auth_config.headers:
                 self._auth_headers = self.auth_config.headers
 
-        connector = aiohttp.TCPConnector(ssl=self.config.verify_ssl, limit=self.config.concurrency)
+        # P0: Cross-platform TLS verification enabled by default
+        if self.config.verify_ssl:
+            try:
+                import certifi
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                ssl_ctx = ssl.create_default_context()
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx, limit=self.config.concurrency)
+        else:
+            connector = aiohttp.TCPConnector(ssl=False, limit=self.config.concurrency)
         async with aiohttp.ClientSession(connector=connector, cookies=self._auth_cookies or None) as session:
             if self.config.respect_robots_txt:
                 await self._fetch_robots_txt(session, self._root_url)

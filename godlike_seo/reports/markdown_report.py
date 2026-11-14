@@ -29,9 +29,19 @@ class MarkdownReportGenerator:
         lines.append(f"# ⚡ SEO & Technical Audit Report: `{report.domain}`")
         lines.append(f"**Target URL:** `{report.url}` | **Evaluated At:** `{report.generated_at[:19]} UTC`\n")
 
+        # Status Banner
+        if report.audit_status == "INDEXATION_BLOCKED":
+            lines.append(f"> [!CAUTION]\n> **CRITICAL RELEASE BLOCKER:** {report.status_message}\n")
+        elif report.audit_status == "STAGING_PROTECTED":
+            lines.append(f"> [!NOTE]\n> **STAGING ENVIRONMENT DETECTED:** {report.status_message}\n")
+        elif report.audit_status == "NEEDS_REVIEW":
+            lines.append(f"> [!WARNING]\n> **AUDIT REQUIRES REVIEW:** {report.status_message}\n")
+
         # 2. Executive Metrics
         lines.append("## 📊 Executive Overview")
         lines.append(f"- **Overall Health Score:** `{report.overall_score:.0f}/100`")
+        lines.append(f"- **Audit Status:** `{report.audit_status}`")
+        lines.append(f"- **Environment Intent:** `{report.environment_intent.upper()}`")
         lines.append(f"- **Evaluated Pages:** `{pages_crawled}`")
         lines.append(f"- **Unique Issue Clusters:** `{clusters_count}` ({raw_occurrences} total raw occurrences)")
         lines.append(f"- **Critical Blockers:** `{critical_count}`")
@@ -40,11 +50,12 @@ class MarkdownReportGenerator:
 
         # 3. Category Breakdown & Transparent Deductions
         lines.append("## 📐 Category Breakdown & Scoring Methodology")
-        lines.append("| Category | Score | Weight | Tests Passed | Deductions |")
-        lines.append("| :--- | :---: | :---: | :---: | :---: |")
+        lines.append("| Category | Score | Weight | Tests Evaluated | Tests Passed | Deductions |")
+        lines.append("| :--- | :---: | :---: | :---: | :---: | :---: |")
 
         for key, cs in report.category_scores.items():
-            lines.append(f"| **{cs.name}** | `{cs.score:.0f}/100` | {int(cs.weight*100)}% | {cs.tests_passed}/{cs.tests_evaluated} | {len(cs.deductions)} |")
+            na_str = f" ({cs.tests_not_applicable} N/A)" if cs.tests_not_applicable > 0 else ""
+            lines.append(f"| **{cs.name}** | `{cs.score:.0f}/100` | {int(cs.weight*100)}% | {cs.tests_evaluated}{na_str} | {cs.tests_passed} | {len(cs.deductions)} |")
 
         lines.append("")
         if report.all_deductions:

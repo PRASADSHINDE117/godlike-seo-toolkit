@@ -2,10 +2,10 @@
 name: seo-toolkit
 description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, and multi-format reporting (Markdown, Excel, HTML, JSON).
 argument-hint: "[crawl|serp|keywords|test-login] [options]"
-version: 3.0.0
+version: 3.1.0
 ---
 
-# ⚡ Godlike SEO Engine 3.0: Agent Skills & Capability Guide
+# ⚡ Godlike SEO Engine 3.1: Agent Skills & Capability Guide
 
 The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
 
@@ -13,7 +13,7 @@ The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engi
 
 ## 🧭 Core Architecture & Agent Philosophy
 
-Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.0 solves this through three core principles that agents must understand:
+Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.1 solves this through five core principles that agents must understand:
 
 1. **Intent-Aware Page Classification (`PageClassifier`)**:
    Before running any audits, every URL and HTTP response is classified into one of six categories:
@@ -24,18 +24,29 @@ Most traditional SEO crawlers produce noisy false alarms by naively applying sta
    - `REDIRECT`: 3xx HTTP redirect responses.
    - `ERROR`: 4xx / 5xx HTTP error responses.
 
-2. **Strict Separation of Observation from Inference**:
+2. **Explicit Canonical Taxonomy (`CanonicalState`)**:
+   Eliminates deceptive canonical assumptions. Canonical declarations are categorized into:
+   - `MISSING`: No canonical tag declared. Google defaults to indexing the requested URL. Never described as "self-canonical".
+   - `SELF_REFERENCING`: Explicitly points to its own normalized URL.
+   - `CROSS_URL`: Points to a different internal or external URL.
+   - `RELATIVE`: Declares a relative URL path (flagged as HIGH risk).
+   - `MULTIPLE`: Conflicting canonical tags declared on the same page.
+   - `INVALID`: Malformed URL or non-HTTP scheme.
+
+3. **Release Gate Evaluation (`audit_status`) & Environment Intent (`--environment`)**:
+   Distinguishes staging protection from production indexation failures:
+   - `STAGING_PROTECTED`: Staging environment correctly protected with `noindex` directives. No score deduction applied.
+   - `INDEXATION_BLOCKED`: Release blocker! Production public pages blocked with sitewide `noindex`. Overall score capped at `0/100`.
+   - `NEEDS_REVIEW`: Critical technical defects requiring developer intervention.
+   - `PASS`: All release criteria satisfied.
+
+4. **Deterministic Rule Execution Ledger (`CheckResult`)**:
+   Replaces synthetic hardcoded test counts with real per-rule execution records across all categories. Each check records status (`PASS`, `FAIL`, `SKIPPED`, `NOT_APPLICABLE`), concrete evidence, and affected URLs. When 0 pages on a site are indexable, the orphan check is marked `NOT_APPLICABLE` rather than claiming tests passed.
+
+5. **Strict Separation of Observation from Inference**:
    Every diagnostic issue separates factual measurement from contextual risk:
    - **Technical Observation**: The objective, measurable fact (e.g. *"Server returned HTTP 404 for URL linked from 27 internal pages"* or *"Document does not declare a `<link rel='canonical'>` tag"*).
    - **SEO Inference & Risk**: The nuanced ranking implication (e.g. *"Breaks user navigation paths and wastes crawler budget"* vs *"On clean unique URLs, Google defaults to indexing the request URL; canonical tag is a defensive safeguard"*).
-
-3. **Transparent, Itemized Mathematical Scoring**:
-   Scores begin at `100.0` points per category and are reduced by calibrated deductions per **unique root-cause issue cluster** (not raw occurrence counts):
-   - **Critical Blocker (`-15.0 pts`)**: Directly blocks crawling or indexation (HTTP 5xx crashes, invalid SSL).
-   - **High Risk (`-8.0 pts`)**: Significantly degrades visibility (duplicate titles across public pages, broken internal links).
-   - **Medium Risk (`-3.0 pts`)**: Measurable ranking/UX defect (thin content, parameterized URL missing canonical).
-   - **Low Risk (`-1.0 pts`)**: Minor refinement (title too long/short, image missing explicit dimensions / CLS risk).
-   - **Informational (`0.0 pts`)**: Growth opportunities (Schema.org rich snippet opportunity, defensive self-referencing canonicals).
 
 ---
 
@@ -104,10 +115,12 @@ python -m godlike_seo crawl <URL> [OPTIONS]
 
 | Option | Flag | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `--max-pages` | `-m` | Maximum pages to crawl | `200` |
+| `--max-pages` | `-m` | Maximum pages to crawl | `50` |
 | `--depth` | `-d` | Maximum click depth from start URL | `3` |
 | `--concurrency` | `-c` | Number of concurrent async workers | `10` |
 | `--format` | `-f` | Report format: `all`, `md`, `xlsx`, `html`, `json` | `all` |
+| `--environment` | `-e` | Target environment intent: `production`, `staging`, `development` | `auto` |
+| `--render-js` | | Enable selective headless Playwright JS rendering | `False` |
 | `--output` | `-o` | Specific destination file path | Auto |
 | `--output-dir` | | Directory to store generated reports | Current Dir |
 | `--keyword` | `-k` | Target search query to benchmark ranking against | `None` |

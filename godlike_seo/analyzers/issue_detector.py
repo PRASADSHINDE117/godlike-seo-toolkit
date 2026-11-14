@@ -44,8 +44,13 @@ META_DESC_MAX_CHARS = 160
 class SEOIssueDetector:
     """Professional, evidence-based SEO auditor."""
 
-    def __init__(self, exclusion_patterns: Optional[List[str]] = None):
+    def __init__(
+        self,
+        exclusion_patterns: Optional[List[str]] = None,
+        environment: Optional[str] = None,
+    ):
         self.exclusion_patterns = exclusion_patterns or []
+        self.environment = (environment or "").lower()
 
     def _should_exclude(self, url: str) -> bool:
         if not self.exclusion_patterns:
@@ -97,9 +102,10 @@ class SEOIssueDetector:
         # 1. Sitewide Infrastructure & Directives checks
         issues.extend(self._check_sitewide_noindex(pages))
 
-        # 2. HTTP & Status checks (runs on all responses)
+        # 2. HTTP & Status checks + Malformed URLs (runs on all crawled URLs)
         for page in pages:
             issues.extend(self._check_http_status(page))
+            issues.extend(self._check_malformed_urls(page))
 
         # 3. Viewport check (runs on all 200 OK HTML)
         for page in html_200_all_pages:
@@ -134,6 +140,8 @@ class SEOIssueDetector:
             if getattr(issue, "anchor_text", None):
                 evidence_entry["anchor_text"] = issue.anchor_text
 
+            aff_urls = list(issue.affected_urls) if issue.affected_urls else ([issue.affected_url] if issue.affected_url else [])
+
             if key not in clusters:
                 clusters[key] = IssueCluster(
                     issue_id=issue.issue_id,
@@ -147,16 +155,17 @@ class SEOIssueDetector:
                     recommendation=issue.recommendation,
                     verification_step=issue.verification_step,
                     confidence=issue.confidence,
-                    occurrences_count=1,
-                    affected_urls=[issue.affected_url],
+                    occurrences_count=len(aff_urls),
+                    affected_urls=list(dict.fromkeys(aff_urls)),
                     sample_evidence=[evidence_entry],
                 )
             else:
                 cluster = clusters[key]
-                cluster.occurrences_count += 1
-                if issue.affected_url not in cluster.affected_urls:
-                    cluster.affected_urls.append(issue.affected_url)
-                if len(cluster.sample_evidence) < 5:
+                cluster.occurrences_count += len(aff_urls)
+                for u in aff_urls:
+                    if u not in cluster.affected_urls:
+                        cluster.affected_urls.append(u)
+                if len(cluster.sample_evidence) < 10:
                     cluster.sample_evidence.append(evidence_entry)
 
         # Refine cluster observation when multiple distinct URLs are affected to prevent single-URL misattribution
@@ -178,6 +187,11 @@ class SEOIssueDetector:
                         f"Found {len(cluster.affected_urls)} distinct public URLs sharing identical body content. "
                         f"Indicates un-canonicalized parameterized URLs or duplicated page variants."
                     )
+                elif cluster.issue_id in ("SITEWIDE_INDEXATION_BLOCK", "STAGING_ENVIRONMENT_NOINDEX_ACTIVE"):
+                    cluster.observation = (
+                        f"Found {len(cluster.affected_urls)} crawled public URLs serving 'noindex' directives. "
+                        f"Directives prevent search engine crawler indexation across all affected routes."
+                    )
 
         # Order clusters by severity
         sev_order = {
@@ -194,38 +208,130 @@ class SEOIssueDetector:
     # ------------------------------------------------------------------
 
     def _check_sitewide_noindex(self, pages: List[PageData]) -> List[SEOIssue]:
-        """Detect domain-wide noindex directives (X-Robots-Tag / meta robots)."""
+        """Detect domain-wide noindex directives across public HTML pages."""
         issues = []
         if not pages:
             return issues
 
-        noindex_pages = []
-        for p in pages:
+        # Context-aware denominator: Evaluate over public HTML pages
+        public_pages = [
+            p for p in pages
+            if p.status_code == 200
+            and p.has_html
+            and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT
+            and not getattr(p, "is_auth_gate", False)
+        ]
+        target_pages = public_pages if len(public_pages) >= 2 else [p for p in pages if p.status_code == 200 and p.has_html]
+        if not target_pages:
+            return issues
+
+        noindex_pages: List[Tuple[PageData, str]] = []
+        for p in target_pages:
             xr = (getattr(p, "x_robots_tag", None) or (p.headers.get("x-robots-tag", "") if hasattr(p, "headers") and p.headers else "")).lower()
             mr = (getattr(p, "meta_robots", "") or "").lower()
             if "noindex" in xr or "noindex" in mr:
                 directive = xr if "noindex" in xr else mr
                 noindex_pages.append((p, directive))
 
-        ratio = len(noindex_pages) / len(pages)
-        if len(pages) >= 2 and (ratio >= 0.7 or len(noindex_pages) == len(pages)):
+        ratio = len(noindex_pages) / len(target_pages)
+        if len(target_pages) >= 2 and (ratio >= 0.7 or len(noindex_pages) == len(target_pages)):
             sample_p, sample_directive = noindex_pages[0]
             root_url = pages[0].url
+            all_affected = [p.url for p, _ in noindex_pages]
+
+            # Detect environment intent
+            env = self.environment
+            if not env or env == "unknown":
+                domain_str = urlparse(root_url).netloc.lower()
+                if any(k in domain_str for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
+                    env = "staging"
+                else:
+                    env = "production"
+
+            if env == "staging":
+                issues.append(SEOIssue(
+                    issue_id="STAGING_ENVIRONMENT_NOINDEX_ACTIVE",
+                    severity=IssueSeverity.INFORMATIONAL,
+                    category=IssueCategory.TECHNICAL,
+                    title="Staging Environment Search Protection (Noindex Directives Active)",
+                    description=f"Server serves 'noindex' across {len(noindex_pages)} of {len(target_pages)} public URLs ({int(ratio * 100)}%), correctly isolating staging.",
+                    affected_url=root_url,
+                    affected_urls=all_affected,
+                    evidence=f"Directives detected across all {len(noindex_pages)} public URLs. Example: {sample_p.url} serves '{sample_directive}'",
+                    observation=f"{len(noindex_pages)} of {len(target_pages)} public pages ({int(ratio * 100)}%) instruct search engines not to index content via 'noindex' directives. In a staging environment, this is recommended best practice to isolate non-production data.",
+                    inference="Search engines will honor these directives and omit this staging host from search results, protecting production brand equity.",
+                    impact="Intentional environment protection. Directive must be removed when deploying to production domain.",
+                    recommendation="Maintain noindex while in staging. Ensure deployment scripts strip 'X-Robots-Tag: noindex' on production deployment.",
+                    verification_step="Before going live to production, verify curl -I https://production-domain/ does not return X-Robots-Tag: noindex.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+            else:
+                issues.append(SEOIssue(
+                    issue_id="SITEWIDE_INDEXATION_BLOCK",
+                    severity=IssueSeverity.CRITICAL,
+                    category=IssueCategory.TECHNICAL,
+                    title="Domain-Wide Search Indexation Block (Sitewide Noindex Directives)",
+                    description=f"Server serves explicit 'noindex' directives across {len(noindex_pages)} of {len(target_pages)} public URLs ({int(ratio * 100)}% of site).",
+                    affected_url=root_url,
+                    affected_urls=all_affected,
+                    evidence=f"Directives detected across {len(noindex_pages)} URLs. Example: {sample_p.url} serves '{sample_directive}'",
+                    observation=f"{len(noindex_pages)} of {len(target_pages)} public pages ({int(ratio * 100)}%) instruct search engines not to index content via HTTP header 'X-Robots-Tag' or HTML meta robots.",
+                    inference="Search engines (Googlebot, Bingbot) will honor these directives and purge the entire website from organic search indexes. Organic search traffic will be zero.",
+                    impact="Zero search engine indexation. The site cannot appear in any organic search results while this header/tag persists.",
+                    recommendation="If this is PRODUCTION, immediately remove the 'X-Robots-Tag: noindex' header from your web server / CDN configuration.",
+                    verification_step="Run `curl -I https://domain/` in your terminal and verify the response headers do NOT contain 'X-Robots-Tag: noindex'.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+        return issues
+
+    # ------------------------------------------------------------------
+    # 0.5 Malformed Route & Slug Detector
+    # ------------------------------------------------------------------
+
+    def _check_malformed_urls(self, page: PageData) -> List[SEOIssue]:
+        """Detect broken frontend route segments, empty slugs, or placeholder tokens."""
+        issues = []
+        parsed = urlparse(page.url)
+        path = parsed.path.lower()
+        query = parsed.query.lower()
+
+        reasons = []
+        # Check path segments
+        segments = [s for s in path.split("/") if s]
+        for seg in segments:
+            if seg in ("undefined", "null", "nan", "[object object]", "[object%20object]"):
+                reasons.append(f"Route segment contains literal '{seg}'")
+            elif "%20" in seg and seg.strip("%20") in ("undefined", "null"):
+                reasons.append(f"Route segment contains encoded placeholder '{seg}'")
+
+        # Check for unpopulated template placeholders e.g. {{slug}}, ${id}
+        if re.search(r"\{\{.*?\}\}|\$\{.*?\}", page.url):
+            reasons.append("URL contains unpopulated frontend template variable syntax (e.g. '{{...}}' or '${...}')")
+
+        # Check title for unpopulated placeholder
+        title = (page.title or "").strip()
+        if title:
+            title_lower = title.lower()
+            if any(p in title_lower for p in (" in undefined", " rent in undefined", "null items", "undefined -", " - undefined")):
+                reasons.append(f"Page title contains unpopulated token: '{title}'")
+
+        if reasons:
             issues.append(SEOIssue(
-                issue_id="SITEWIDE_INDEXATION_BLOCK",
-                severity=IssueSeverity.CRITICAL,
+                issue_id="MALFORMED_LOCATION_URL",
+                severity=IssueSeverity.HIGH,
                 category=IssueCategory.TECHNICAL,
-                title="Domain-Wide Search Indexation Block (X-Robots-Tag / Robots Directives)",
-                description=f"Server serves explicit 'noindex' directives across {len(noindex_pages)} of {len(pages)} crawled URLs ({int(ratio * 100)}% of site).",
-                affected_url=root_url,
-                evidence=f"Directives detected across {len(noindex_pages)} URLs. Example: {sample_p.url} serves '{sample_directive}'",
-                observation=f"{len(noindex_pages)} of {len(pages)} crawled pages ({int(ratio * 100)}%) instruct search engines not to index content via HTTP header 'X-Robots-Tag' or HTML meta robots.",
-                inference="Search engines (Googlebot, Bingbot) will honor these directives and purge the entire website from organic search indexes. Organic search traffic will be zero.",
-                impact="Zero search engine indexation. The site cannot appear in any organic search results while this header/tag persists.",
-                recommendation="If this is a staging/candidate environment, this configuration is intentional to protect testing environments. If this is PRODUCTION, immediately remove the 'X-Robots-Tag: noindex' header from your web server / CDN configuration.",
-                verification_step="Run `curl -I https://domain/` in your terminal and verify the response headers do NOT contain 'X-Robots-Tag: noindex'.",
+                title="Malformed Route Segment or Unpopulated Placeholder URL",
+                description=f"URL or title contains unpopulated variable: {'; '.join(reasons)}",
+                affected_url=page.url,
+                evidence=f"URL: {page.url} | Title: '{page.title}' | Evidence: {'; '.join(reasons)}",
+                observation=f"URL path or title contains unpopulated template variable: {'; '.join(reasons)}. Indicates a client-side routing defect or missing parameter check in dynamic link generation.",
+                inference="Search engines crawling these placeholder links index broken routes and waste crawl budget. Users visiting these pages receive 404 errors or blank listings.",
+                impact="Leads to crawl budget waste, broken user journeys, and potential 404 indexing spikes.",
+                recommendation="Update frontend routing and link generator components to validate slug/location variables before generating <a href> links, falling back to clean parent category routes.",
+                verification_step="Inspect internal links pointing to this URL and verify all router parameters are defined before URL interpolation.",
                 confidence=IssueConfidence.HIGH,
             ))
+
         return issues
 
     # ------------------------------------------------------------------
@@ -388,21 +494,39 @@ class SEOIssueDetector:
 
         if matched_indicators:
             sample = matched_indicators[0]
-            issues.append(SEOIssue(
-                issue_id="PUBLIC_STAGING_TEST_CONTENT",
-                severity=IssueSeverity.HIGH,
-                category=IssueCategory.CONTENT,
-                title="Staging / Mock Test Content Detected on Public Page",
-                description=f"Public page contains test/mock placeholders or staging warnings: {sample}",
-                affected_url=page.url,
-                evidence="; ".join(matched_indicators),
-                observation=f"Page content contains staging or placeholder artifacts: {'; '.join(matched_indicators)}.",
-                inference="Demonstrates staging or dummy data leakage into crawlable routes. Users and search engines will perceive the website as incomplete, test-only, or untrustworthy, harming E-E-A-T quality evaluation.",
-                impact="Severe E-E-A-T demotion by search quality algorithms and immediate loss of user transactional trust.",
-                recommendation="Purge test and staging data from the production database or isolate staging environments with HTTP authentication and robots noindex.",
-                verification_step="Inspect page text to ensure all placeholder and staging notices are replaced with authentic, production-ready product data.",
-                confidence=IssueConfidence.HIGH,
-            ))
+            is_staging_env = self.environment == "staging" or "staging" in urlparse(page.url).netloc.lower()
+            if is_staging_env:
+                issues.append(SEOIssue(
+                    issue_id="PUBLIC_STAGING_TEST_CONTENT",
+                    severity=IssueSeverity.INFORMATIONAL,
+                    category=IssueCategory.CONTENT,
+                    title="Staging / Mock Inventory Present (Expected in Staging)",
+                    description=f"Staging page contains test/mock placeholders: {sample}",
+                    affected_url=page.url,
+                    evidence="; ".join(matched_indicators),
+                    observation=f"Page content contains staging or placeholder artifacts: {'; '.join(matched_indicators)}.",
+                    inference="Expected condition on a staging host. Acceptable for internal testing, but must be replaced with authentic product data prior to production migration.",
+                    impact="Informational in staging environment. Must be cleared prior to production migration.",
+                    recommendation="Ensure staging database is refreshed with production-ready catalog data before public launch.",
+                    verification_step="Inspect page text before deployment to ensure all placeholder and staging notices are replaced.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+            else:
+                issues.append(SEOIssue(
+                    issue_id="PUBLIC_STAGING_TEST_CONTENT",
+                    severity=IssueSeverity.HIGH,
+                    category=IssueCategory.CONTENT,
+                    title="Staging / Mock Test Content Detected on Public Page",
+                    description=f"Public page contains test/mock placeholders or staging warnings: {sample}",
+                    affected_url=page.url,
+                    evidence="; ".join(matched_indicators),
+                    observation=f"Page content contains staging or placeholder artifacts: {'; '.join(matched_indicators)}.",
+                    inference="Demonstrates staging or dummy data leakage into crawlable routes. Users and search engines will perceive the website as incomplete, test-only, or untrustworthy, harming E-E-A-T quality evaluation.",
+                    impact="Severe E-E-A-T demotion by search quality algorithms and immediate loss of user transactional trust.",
+                    recommendation="Purge test and staging data from the production database or isolate staging environments with HTTP authentication and robots noindex.",
+                    verification_step="Inspect page text to ensure all placeholder and staging notices are replaced with authentic, production-ready product data.",
+                    confidence=IssueConfidence.HIGH,
+                ))
 
         return issues
 
@@ -538,29 +662,29 @@ class SEOIssueDetector:
         if not h1s:
             issues.append(SEOIssue(
                 issue_id="MISSING_H1_TAG",
-                severity=IssueSeverity.HIGH,
+                severity=IssueSeverity.MEDIUM,
                 category=IssueCategory.ON_PAGE,
                 title="Missing Main H1 Heading",
                 description="No <h1> heading was found on this page.",
                 affected_url=page.url,
                 evidence="DOM tree inspected; <h1> element count is 0.",
-                impact="H1 gives crawlers and assistive technologies the primary contextual topic of the page.",
-                recommendation="Add a single <h1> heading clearly stating the main page subject.",
+                impact="H1 heading provides assistive screen readers and search engines with the main topic context. While pages can still rank without an H1 if title and content are strong, an H1 is a foundational on-page semantic best practice.",
+                recommendation="Add a single, descriptive <h1> heading summarizing the main page topic.",
                 verification_step="Inspect the rendered DOM to verify <h1> exists.",
                 confidence=IssueConfidence.HIGH,
             ))
         elif len(h1s) > 1:
             issues.append(SEOIssue(
                 issue_id="MULTIPLE_H1_TAGS",
-                severity=IssueSeverity.LOW,
+                severity=IssueSeverity.INFORMATIONAL,
                 category=IssueCategory.ON_PAGE,
-                title=f"Multiple H1 Headings Found ({len(h1s)} tags)",
+                title=f"Multiple H1 Headings Declared ({len(h1s)} tags)",
                 description="The page contains more than one <h1> element.",
                 affected_url=page.url,
                 evidence=f"H1 tags: {', '.join(h1s[:3])}",
-                impact="Multiple H1s dilute topical focus and can confuse heading hierarchy for screen readers.",
-                recommendation="Keep one primary <h1> heading per page. Demote secondary headings to <h2>.",
-                verification_step="Verify exactly one <h1> exists in DOM.",
+                impact="HTML5 explicitly supports multiple H1 elements (e.g. across nested sections or article elements). Google does not penalize multiple H1s, though a single H1 remains the industry convention for clear document structure.",
+                recommendation="Ensure headings reflect a logical outline. Demote secondary section headers to <h2> if not using HTML5 sectioning.",
+                verification_step="Verify heading hierarchy in rendered DOM.",
                 confidence=IssueConfidence.HIGH,
             ))
 
@@ -679,21 +803,38 @@ class SEOIssueDetector:
     def _check_content_quality(self, page: PageData, hash_map: Dict[str, List[PageData]]) -> List[SEOIssue]:
         issues = []
 
-        # Thin content check: Only flag on public pages with < 150 words of actual body text
-        if page.word_count < 150:
+        # Calibrated content depth check:
+        # Near-empty pages (< 25 words) are flagged as LOW; pages under 150 words receive an INFORMATIONAL opportunity
+        if page.word_count < 25:
             issues.append(SEOIssue(
-                issue_id="THIN_CONTENT",
-                severity=IssueSeverity.MEDIUM,
+                issue_id="VERY_THIN_CONTENT",
+                severity=IssueSeverity.LOW,
                 category=IssueCategory.CONTENT,
-                title=f"Thin Body Content ({page.word_count} words)",
+                title=f"Extremely Low Text Content ({page.word_count} words)",
                 description=f"The page body contains only {page.word_count} words of text.",
                 affected_url=page.url,
                 evidence=f"Extracted plain text length: {page.word_count} words.",
-                observation=f"Extracted plain text length is {page.word_count} words (recommended minimum: 150 words).",
-                inference="Pages with minimal substance struggle to demonstrate search intent fulfillment or achieve topical depth.",
+                observation=f"Extracted plain text length is {page.word_count} words.",
+                inference="Documents with virtually zero textual substance cannot fulfill organic search intent.",
                 impact="Pages with minimal substance struggle to demonstrate search intent fulfillment or achieve topical depth.",
-                recommendation="Enrich the page with helpful, authoritative explanations, specifications, or FAQs.",
+                recommendation="Enrich the page with substantive descriptive text, product specifications, or FAQs.",
                 verification_step="Review content word count and depth.",
+                confidence=IssueConfidence.HIGH,
+            ))
+        elif page.word_count < 150:
+            issues.append(SEOIssue(
+                issue_id="CONTENT_DEPTH_OPPORTUNITY",
+                severity=IssueSeverity.INFORMATIONAL,
+                category=IssueCategory.CONTENT,
+                title=f"Topical Content Depth Opportunity ({page.word_count} words)",
+                description=f"Page body contains {page.word_count} words of text.",
+                affected_url=page.url,
+                evidence=f"Extracted plain text length: {page.word_count} words.",
+                observation=f"Extracted plain text length is {page.word_count} words.",
+                inference="E-commerce listing, category, and transactional pages frequently utilize product card grids with concise copy. Adding 100-200 words of introductory context can improve relevance for long-tail queries without altering design.",
+                impact="Informational optimization opportunity; does not penalize transactional or category listing layouts.",
+                recommendation="Consider adding a brief introductory summary or FAQ section to strengthen long-tail keyword relevance.",
+                verification_step="Review whether additional contextual copy would benefit target search queries.",
                 confidence=IssueConfidence.MEDIUM,
             ))
 

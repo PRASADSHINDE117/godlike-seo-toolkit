@@ -16,7 +16,10 @@ from godlike_seo.analyzers.issue_detector import SEOIssueDetector
 from godlike_seo.analyzers.link_analyzer import LinkAnalyzer
 from godlike_seo.analyzers.technical_analyzer import TechnicalAnalyzer
 from godlike_seo.models import (
+    CanonicalState,
     CategoryScore,
+    CheckResult,
+    CheckStatus,
     CompetitorAnalysis,
     CrawlResult,
     IssueCategory,
@@ -40,11 +43,267 @@ DEDUCTION_RATES = {
 }
 
 
+RULE_CATALOG = [
+    # Technical & Crawlability
+    {
+        "rule_id": "TECH-001",
+        "category": IssueCategory.TECHNICAL,
+        "title": "HTTP Status & Crawlability",
+        "description": "Verifies that all crawled URLs return clean 200 OK responses without 4xx client or 5xx server errors.",
+        "issue_ids": {"HTTP_404_INTERNAL_LINKED", "HTTP_404_RESOURCE", "HTTP_500_SERVER_ERROR", "CONNECTION_ERROR"},
+    },
+    {
+        "rule_id": "TECH-002",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Search Indexation Directives",
+        "description": "Validates that production public pages do not serve blocking 'noindex' directives via HTTP headers or HTML meta tags.",
+        "issue_ids": {"SITEWIDE_INDEXATION_BLOCK"},
+    },
+    {
+        "rule_id": "TECH-003",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Canonical Directive Consistency",
+        "description": "Ensures all indexable pages declare absolute, valid canonical URLs without conflicting tags or parameter drops.",
+        "issue_ids": {"MISSING_CANONICAL_WITH_QUERY", "RELATIVE_CANONICAL_URL", "CONFLICTING_CANONICAL_TAGS", "CANONICAL_POINTS_TO_4XX"},
+    },
+    {
+        "rule_id": "TECH-004",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Route Segment & Placeholder Slugs",
+        "description": "Detects unpopulated frontend variables or broken URL segments such as '/undefined/', '/null/', or empty slugs.",
+        "issue_ids": {"MALFORMED_LOCATION_URL"},
+    },
+    {
+        "rule_id": "TECH-005",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Redirect Chains & Loops",
+        "description": "Confirms internal links point directly to destination URLs without unnecessary 301/302 hops or infinite loops.",
+        "issue_ids": {"REDIRECT_CHAIN", "REDIRECT_LOOP"},
+    },
+    {
+        "rule_id": "TECH-006",
+        "category": IssueCategory.TECHNICAL,
+        "title": "XML Sitemap Discovery & Coverage",
+        "description": "Verifies that an accessible XML sitemap is present and references public indexable pages.",
+        "issue_ids": {"MISSING_SITEMAP", "SITEMAP_INDEXABILITY_MISMATCH"},
+    },
+    {
+        "rule_id": "TECH-007",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Robots.txt Directives & Accessibility",
+        "description": "Checks that robots.txt exists, parses valid directives, and avoids disallowing critical public assets.",
+        "issue_ids": {"ROBOTS_TXT_MISSING", "ROBOTS_DISALLOW_CRITICAL"},
+    },
+    {
+        "rule_id": "TECH-008",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Server Response Latency",
+        "description": "Monitors Time to First Byte (TTFB) and ensures server response times remain under 1000ms.",
+        "issue_ids": {"SLOW_RESPONSE_TIME"},
+    },
+
+    # On-Page & Metadata
+    {
+        "rule_id": "ONPAGE-001",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Title Tag Presence & Length",
+        "description": "Checks that every public page has a descriptive <title> tag between 10 and 65 characters.",
+        "issue_ids": {"MISSING_TITLE_TAG", "TITLE_TOO_LONG", "TITLE_TOO_SHORT"},
+    },
+    {
+        "rule_id": "ONPAGE-002",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Title Tag Uniqueness",
+        "description": "Verifies that distinct public URLs do not share identical <title> tags across the site.",
+        "issue_ids": {"DUPLICATE_TITLE_TAG"},
+    },
+    {
+        "rule_id": "ONPAGE-003",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Meta Description Presence & Length",
+        "description": "Ensures pages have a concise meta description tag between 70 and 160 characters for SERP snippets.",
+        "issue_ids": {"MISSING_META_DESCRIPTION", "META_DESCRIPTION_TOO_LONG"},
+    },
+    {
+        "rule_id": "ONPAGE-004",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Main H1 Heading Presence",
+        "description": "Checks that every public content page declares a main <h1> heading clearly defining the page subject.",
+        "issue_ids": {"MISSING_H1_TAG"},
+    },
+    {
+        "rule_id": "ONPAGE-005",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Heading Hierarchy & Multiplicity",
+        "description": "Audits heading hierarchy to ensure logical outline without conflicting heading structures.",
+        "issue_ids": {"MULTIPLE_H1_TAGS"},
+    },
+    {
+        "rule_id": "ONPAGE-006",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Image Alt Text Accessibility",
+        "description": "Verifies that <img> elements include descriptive alt attributes for accessibility and Google Images.",
+        "issue_ids": {"IMAGE_MISSING_ALT"},
+    },
+    {
+        "rule_id": "ONPAGE-007",
+        "category": IssueCategory.ON_PAGE,
+        "title": "Open Graph & Social Metadata",
+        "description": "Checks for complete Open Graph and Twitter Card tags to optimize link previews when shared.",
+        "issue_ids": {"MISSING_OPEN_GRAPH", "MISSING_TWITTER_CARD"},
+    },
+    {
+        "rule_id": "ONPAGE-008",
+        "category": IssueCategory.ON_PAGE,
+        "title": "HTML Language & Encoding",
+        "description": "Ensures the <html> element declares a valid lang attribute for internationalization and screen readers.",
+        "issue_ids": {"MISSING_HTML_LANG"},
+    },
+
+    # Content & Topical Depth
+    {
+        "rule_id": "CONTENT-001",
+        "category": IssueCategory.CONTENT,
+        "title": "Substantive Body Text Depth",
+        "description": "Evaluates body copy length to ensure documents contain substantive indexable text.",
+        "issue_ids": {"VERY_THIN_CONTENT", "THIN_CONTENT"},
+    },
+    {
+        "rule_id": "CONTENT-002",
+        "category": IssueCategory.CONTENT,
+        "title": "Content Uniqueness Across URLs",
+        "description": "Checks body content hashes to detect 100% duplicate page text across distinct public URLs.",
+        "issue_ids": {"DUPLICATE_PAGE_CONTENT"},
+    },
+    {
+        "rule_id": "CONTENT-003",
+        "category": IssueCategory.CONTENT,
+        "title": "Staging & Test Data Leakage",
+        "description": "Scans public documents for mock listings, lorem ipsum placeholders, or staging notices.",
+        "issue_ids": {"PUBLIC_STAGING_TEST_CONTENT"},
+    },
+    {
+        "rule_id": "CONTENT-004",
+        "category": IssueCategory.CONTENT,
+        "title": "Topical Context & Substance",
+        "description": "Audits pages for introductory summaries, FAQs, or sufficient contextual copy to fulfill search intent.",
+        "issue_ids": {"CONTENT_DEPTH_OPPORTUNITY"},
+    },
+
+    # Site Architecture & Links
+    {
+        "rule_id": "LINK-001",
+        "category": IssueCategory.INTERNAL_LINKING,
+        "title": "Orphaned Public Indexable Pages",
+        "description": "Audits internal link graph to ensure all indexable public pages receive at least one internal navigation link.",
+        "issue_ids": {"ORPHANED_PAGE_DETECTED"},
+    },
+    {
+        "rule_id": "LINK-002",
+        "category": IssueCategory.INTERNAL_LINKING,
+        "title": "Dead-End Content Pages",
+        "description": "Checks for public content documents with 0 outbound internal links that trap PageRank equity.",
+        "issue_ids": {"DEAD_END_PAGE"},
+    },
+    {
+        "rule_id": "LINK-003",
+        "category": IssueCategory.INTERNAL_LINKING,
+        "title": "Click Depth & Architecture Hierarchy",
+        "description": "Verifies that core public content is reachable within 3 clicks from the root homepage.",
+        "issue_ids": {"EXCESSIVE_CLICK_DEPTH"},
+    },
+    {
+        "rule_id": "LINK-004",
+        "category": IssueCategory.INTERNAL_LINKING,
+        "title": "Internal Link Nofollow Directives",
+        "description": "Ensures internal navigation does not waste PageRank by applying rel='nofollow' to internal links.",
+        "issue_ids": {"INTERNAL_LINK_NOFOLLOW"},
+    },
+    {
+        "rule_id": "LINK-005",
+        "category": IssueCategory.INTERNAL_LINKING,
+        "title": "Anchor Text Quality & Descriptive Links",
+        "description": "Audits anchor texts for generic phrases ('click here', 'read more') that offer no keyword context.",
+        "issue_ids": {"NON_DESCRIPTIVE_ANCHOR"},
+    },
+
+    # Mobile & Responsive
+    {
+        "rule_id": "MOB-001",
+        "category": IssueCategory.MOBILE,
+        "title": "Viewport Meta Tag Presence",
+        "description": "Ensures HTML head contains a <meta name='viewport'> element for mobile browsers.",
+        "issue_ids": {"MISSING_VIEWPORT_TAG"},
+    },
+    {
+        "rule_id": "MOB-002",
+        "category": IssueCategory.MOBILE,
+        "title": "Responsive Device-Width Configuration",
+        "description": "Confirms viewport is configured as 'width=device-width' rather than fixed pixel dimensions.",
+        "issue_ids": {"FIXED_WIDTH_VIEWPORT"},
+    },
+    {
+        "rule_id": "MOB-003",
+        "category": IssueCategory.PERFORMANCE,
+        "title": "Image Cumulative Layout Shift Prevention",
+        "description": "Checks that <img> elements declare explicit width and height attributes or CSS aspect-ratio.",
+        "issue_ids": {"IMAGE_MISSING_DIMENSIONS"},
+    },
+
+    # Security & Standards
+    {
+        "rule_id": "SEC-001",
+        "category": IssueCategory.SECURITY,
+        "title": "HTTPS Protocol Enforcement",
+        "description": "Validates that all site routes enforce HTTPS encryption and redirect HTTP requests cleanly.",
+        "issue_ids": {"INSECURE_HTTP_PROTOCOL"},
+    },
+    {
+        "rule_id": "SEC-002",
+        "category": IssueCategory.SECURITY,
+        "title": "TLS Certificate Verification",
+        "description": "Verifies that the server presents a trusted, valid TLS certificate without chain errors.",
+        "issue_ids": {"INVALID_SSL_CERTIFICATE"},
+    },
+    {
+        "rule_id": "SEC-003",
+        "category": IssueCategory.SECURITY,
+        "title": "Mixed Content Detection",
+        "description": "Ensures secure HTTPS pages do not load insecure HTTP stylesheets, scripts, or media assets.",
+        "issue_ids": {"MIXED_CONTENT"},
+    },
+    {
+        "rule_id": "SEC-004",
+        "category": IssueCategory.SECURITY,
+        "title": "Defensive Security Headers",
+        "description": "Evaluates presence of modern security headers (HSTS, Content-Security-Policy, X-Frame-Options).",
+        "issue_ids": {"MISSING_HSTS_HEADER"},
+    },
+
+    # Structured Data
+    {
+        "rule_id": "SCHEMA-001",
+        "category": IssueCategory.STRUCTURED_DATA,
+        "title": "Schema.org Rich Snippet Opportunity",
+        "description": "Identifies opportunities to add Schema.org JSON-LD to qualify for Google rich search results.",
+        "issue_ids": {"OPPORTUNITY_SCHEMA_MARKUP"},
+    },
+    {
+        "rule_id": "SCHEMA-002",
+        "category": IssueCategory.STRUCTURED_DATA,
+        "title": "JSON-LD Syntax & Parsing Validity",
+        "description": "Validates that declared JSON-LD script blocks are free of syntax errors and unescaped characters.",
+        "issue_ids": {"INVALID_JSON_LD"},
+    },
+]
+
+
 class ReportGenerator:
     """Combines crawl data, runs all audits, clusters findings, and computes transparent scores."""
 
-    def __init__(self):
-        self.issue_detector = SEOIssueDetector()
+    def __init__(self, environment: Optional[str] = None):
+        self.environment = environment
+        self.issue_detector = SEOIssueDetector(environment=environment)
         self.content_analyzer = ContentAnalyzer()
         self.technical_analyzer = TechnicalAnalyzer()
         self.link_analyzer = LinkAnalyzer()
@@ -54,11 +313,23 @@ class ReportGenerator:
         crawl_result: CrawlResult,
         competitor_analyses: Optional[List[CompetitorAnalysis]] = None,
         serp_analyses: Optional[List[SERPAnalysis]] = None,
+        environment: Optional[str] = None,
     ) -> SEOReport:
         pages = crawl_result.pages
         domain = crawl_result.domain or (urlparse(crawl_result.start_url).netloc if crawl_result.start_url else "")
 
-        logger.info("Generating Evidence-Based SEO Report 3.0 for: %s (%d pages)", domain, len(pages))
+        # Resolve environment intent
+        env_intent = environment or getattr(crawl_result, "environment", None) or self.environment or "unknown"
+        if env_intent == "unknown" or not env_intent:
+            if any(k in domain.lower() for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
+                env_intent = "staging"
+            else:
+                env_intent = "production"
+
+        # Update detector environment if needed
+        self.issue_detector.environment = env_intent
+
+        logger.info("Generating Evidence-Based SEO Report 3.1 for: %s (%d pages, env: %s)", domain, len(pages), env_intent)
 
         # 1. Run Link Analysis first to populate inlinks_count and internal PageRank
         link_audit = self.link_analyzer.analyze(pages)
@@ -82,7 +353,61 @@ class ReportGenerator:
         # 5. Cluster identical issues across multiple URLs
         clusters: List[IssueCluster] = self.issue_detector.cluster_issues(raw_issues)
 
-        # 6. Group clusters by category and compute reproducible scores
+        # 6. Build Deterministic Rule Execution Ledger
+        cluster_map: Dict[str, IssueCluster] = {c.issue_id: c for c in clusters}
+        ledger: List[CheckResult] = []
+
+        eligible_indexable_count = link_audit.get("eligible_indexable_count", 0)
+
+        for rule in RULE_CATALOG:
+            r_id = rule["rule_id"]
+            cat = rule["category"]
+            r_title = rule["title"]
+            r_desc = rule["description"]
+            matched_clusters = [cluster_map[iid] for iid in rule["issue_ids"] if iid in cluster_map]
+
+            if matched_clusters:
+                primary = matched_clusters[0]
+                total_aff = list(dict.fromkeys([u for mc in matched_clusters for u in mc.affected_urls]))
+                ledger.append(CheckResult(
+                    rule_id=r_id,
+                    rule_version="3.1",
+                    category=cat,
+                    status=CheckStatus.FAIL,
+                    title=r_title,
+                    description=primary.description,
+                    evidence=primary.observation,
+                    affected_count=len(total_aff),
+                    affected_urls=total_aff,
+                ))
+            else:
+                # Special applicability conditions
+                if r_id == "LINK-001" and eligible_indexable_count == 0:
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.1",
+                        category=cat,
+                        status=CheckStatus.NOT_APPLICABLE,
+                        title=r_title,
+                        description="Not applicable: 0 indexable public content pages exist in crawl scope (e.g. sitewide noindex active).",
+                        evidence="Orphan check skipped because no public indexable pages were crawlable.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
+                else:
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.1",
+                        category=cat,
+                        status=CheckStatus.PASS,
+                        title=r_title,
+                        description=r_desc,
+                        evidence="Verified without defects across crawled document set.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
+
+        # 7. Group clusters by category and compute reproducible scores
         cat_clusters: Dict[IssueCategory, List[IssueCluster]] = {}
         for c in clusters:
             cat_clusters.setdefault(c.category, []).append(c)
@@ -92,10 +417,10 @@ class ReportGenerator:
         def build_category_score(
             cat_name: str,
             category: IssueCategory,
-            total_tests: int,
             weight: float,
         ) -> CategoryScore:
             cat_list = cat_clusters.get(category, [])
+            cat_results = [r for r in ledger if r.category == category]
             deductions: List[ScoreDeduction] = []
             score = 100.0
 
@@ -114,10 +439,15 @@ class ReportGenerator:
                     all_deductions.append(deduction)
 
             final_score = max(0.0, round(score, 1))
-            tests_passed = max(0, total_tests - len(deductions))
+            tests_eval = len([r for r in cat_results if r.status in (CheckStatus.PASS, CheckStatus.FAIL)])
+            tests_pass = len([r for r in cat_results if r.status == CheckStatus.PASS])
+            tests_skip = len([r for r in cat_results if r.status == CheckStatus.SKIPPED])
+            tests_na = len([r for r in cat_results if r.status == CheckStatus.NOT_APPLICABLE])
 
             status = "PASSED"
-            if final_score < 50:
+            if tests_eval == 0 and tests_na > 0:
+                status = "NOT_APPLICABLE"
+            elif final_score < 50:
                 status = "FAILED"
             elif final_score < 75:
                 status = "WARNING"
@@ -128,25 +458,55 @@ class ReportGenerator:
                 name=cat_name,
                 score=final_score,
                 weight=weight,
-                tests_evaluated=total_tests,
-                tests_passed=tests_passed,
+                tests_evaluated=tests_eval,
+                tests_passed=tests_pass,
+                tests_skipped=tests_skip,
+                tests_not_applicable=tests_na,
                 deductions=deductions,
+                check_results=cat_results,
                 status=status,
             )
 
         category_scores: Dict[str, CategoryScore] = {
-            "technical": build_category_score("Technical & Crawlability", IssueCategory.TECHNICAL, 10, 0.25),
-            "on_page": build_category_score("On-Page & Metadata", IssueCategory.ON_PAGE, 8, 0.25),
-            "content": build_category_score("Content & Topical Depth", IssueCategory.CONTENT, 6, 0.20),
-            "internal_linking": build_category_score("Site Architecture & Links", IssueCategory.INTERNAL_LINKING, 6, 0.15),
-            "mobile": build_category_score("Mobile & Responsive", IssueCategory.MOBILE, 4, 0.10),
-            "security": build_category_score("Security & Standards", IssueCategory.SECURITY, 5, 0.05),
+            "technical": build_category_score("Technical & Crawlability", IssueCategory.TECHNICAL, 0.25),
+            "on_page": build_category_score("On-Page & Metadata", IssueCategory.ON_PAGE, 0.25),
+            "content": build_category_score("Content & Topical Depth", IssueCategory.CONTENT, 0.20),
+            "internal_linking": build_category_score("Site Architecture & Links", IssueCategory.INTERNAL_LINKING, 0.15),
+            "mobile": build_category_score("Mobile & Responsive", IssueCategory.MOBILE, 0.10),
+            "security": build_category_score("Security & Standards", IssueCategory.SECURITY, 0.05),
         }
 
         # Weighted Master Score
         overall_score = round(sum(cs.score * cs.weight for cs in category_scores.values()), 1)
 
-        # 7. Actionable recommendations from clusters
+        # Release Gate Evaluation
+        has_sitewide_noindex = any(c.issue_id == "SITEWIDE_INDEXATION_BLOCK" for c in clusters)
+        has_staging_noindex = any(c.issue_id == "STAGING_ENVIRONMENT_NOINDEX_ACTIVE" for c in clusters)
+
+        if has_sitewide_noindex and env_intent != "staging":
+            audit_status = "INDEXATION_BLOCKED"
+            status_message = (
+                "CRITICAL RELEASE BLOCKER: Sitewide 'noindex' directive detected across public pages on production host. "
+                "Search engines cannot index this website. Master score capped at 0/100 (Indexation Blocked)."
+            )
+            overall_score = 0.0
+        elif has_staging_noindex or (has_sitewide_noindex and env_intent == "staging"):
+            audit_status = "STAGING_PROTECTED"
+            status_message = (
+                "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
+                "from search engine indexing."
+            )
+        elif any(c.severity == IssueSeverity.CRITICAL for c in clusters):
+            audit_status = "NEEDS_REVIEW"
+            status_message = "Audit detected critical technical defects requiring developer remediation."
+        elif overall_score < 70:
+            audit_status = "NEEDS_REVIEW"
+            status_message = "Audit score is below acceptable deployment threshold (70/100)."
+        else:
+            audit_status = "PASS"
+            status_message = "All core technical and on-page release criteria satisfied."
+
+        # 8. Actionable recommendations from clusters
         recommendations: List[str] = []
         for cluster in clusters:
             if cluster.severity in (IssueSeverity.CRITICAL, IssueSeverity.HIGH):
@@ -162,6 +522,7 @@ class ReportGenerator:
             "total_pages_crawled": len(pages),
             "total_tests_evaluated": sum(cs.tests_evaluated for cs in category_scores.values()),
             "total_tests_passed": sum(cs.tests_passed for cs in category_scores.values()),
+            "total_tests_not_applicable": sum(cs.tests_not_applicable for cs in category_scores.values()),
             "unique_issue_clusters": len(clusters),
             "total_raw_occurrences": len(raw_issues),
             "critical_clusters_count": len([c for c in clusters if c.severity == IssueSeverity.CRITICAL]),
@@ -172,6 +533,8 @@ class ReportGenerator:
             "orphaned_pages_count": len(crawl_result.orphaned_pages),
             "average_response_time_ms": tech_audit.get("average_response_time_ms", 0),
             "average_word_count": content_audit.get("average_word_count", 0),
+            "audit_status": audit_status,
+            "environment_intent": env_intent,
         }
 
         comp_analyses = competitor_analyses or []
@@ -183,6 +546,10 @@ class ReportGenerator:
             overall_score=overall_score,
             category_scores=category_scores,
             all_deductions=all_deductions,
+            audit_status=audit_status,
+            status_message=status_message,
+            environment_intent=env_intent,
+            check_ledger=ledger,
             issue_clusters=clusters,
             raw_issues=raw_issues,
             recommendations=recommendations,

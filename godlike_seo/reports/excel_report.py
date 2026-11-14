@@ -63,14 +63,20 @@ class ExcelReportGenerator:
         # ---------------------------------------------------------------
         # TAB 1: Summary & Health
         # ---------------------------------------------------------------
-        ws_summary["A1"] = "⚡ GODLIKE SEO ENGINE 3.0 - AUDIT REPORT"
+        ws_summary["A1"] = "⚡ GODLIKE SEO ENGINE 3.1 - AUDIT REPORT"
         ws_summary["A1"].font = self.title_font
         ws_summary["A2"] = f"Target: {report.url} | Domain: {report.domain} | Generated: {report.generated_at[:19]} UTC"
         ws_summary["A2"].font = Font(name="Calibri", size=10, italic=True, color="64748B")
 
+        status_color = "16A34A" if report.audit_status == "PASS" else ("2563EB" if report.audit_status == "STAGING_PROTECTED" else "DC2626")
+        ws_summary["A3"] = f"Release Status: {report.audit_status} | Environment: {report.environment_intent.upper()}"
+        ws_summary["A3"].font = Font(name="Calibri", size=11, bold=True, color=status_color)
+
         # Key Metrics Block
         metrics = [
             ("Overall SEO Health Score", f"{report.overall_score:.0f}/100"),
+            ("Audit Release Status", report.audit_status),
+            ("Environment Intent", report.environment_intent.upper()),
             ("Pages Crawled", stats.get("total_pages_crawled", len(report.crawl_result.pages) if report.crawl_result else 0)),
             ("Unique Issue Clusters", stats.get("unique_issue_clusters", len(report.issue_clusters))),
             ("Raw Issue Occurrences", stats.get("total_raw_occurrences", len(report.raw_issues))),
@@ -78,14 +84,14 @@ class ExcelReportGenerator:
             ("Orphaned Indexable Pages", stats.get("orphaned_pages_count", len(report.crawl_result.orphaned_pages) if report.crawl_result else 0)),
             ("Avg TTFB (Server Response)", f"{stats.get('average_response_time_ms', 0):.0f} ms"),
         ]
-        ws_summary["A4"] = "Core Performance Metric"
-        ws_summary["B4"] = "Measured Value"
-        ws_summary["A4"].font = self.header_font
-        ws_summary["B4"].font = self.header_font
-        ws_summary["A4"].fill = self.header_fill
-        ws_summary["B4"].fill = self.header_fill
+        ws_summary["A5"] = "Core Performance Metric"
+        ws_summary["B5"] = "Measured Value"
+        ws_summary["A5"].font = self.header_font
+        ws_summary["B5"].font = self.header_font
+        ws_summary["A5"].fill = self.header_fill
+        ws_summary["B5"].fill = self.header_fill
 
-        for idx, (m_name, m_val) in enumerate(metrics, start=5):
+        for idx, (m_name, m_val) in enumerate(metrics, start=6):
             ws_summary.cell(row=idx, column=1, value=m_name).font = self.bold_font
             c = ws_summary.cell(row=idx, column=2, value=m_val)
             c.font = self.bold_font
@@ -94,7 +100,7 @@ class ExcelReportGenerator:
             c.border = self.border
 
         # Category Breakdown Table
-        cat_start = len(metrics) + 7
+        cat_start = len(metrics) + 8
         ws_summary.cell(row=cat_start, column=1, value="Category").fill = self.header_fill
         ws_summary.cell(row=cat_start, column=2, value="Score").fill = self.header_fill
         ws_summary.cell(row=cat_start, column=3, value="Weight").fill = self.header_fill
@@ -112,7 +118,7 @@ class ExcelReportGenerator:
             for c in range(1, 6):
                 ws_summary.cell(row=idx, column=c).border = self.border
 
-        self._apply_table_styling(ws_summary, 4, 5)
+        self._apply_table_styling(ws_summary, 5, 5)
 
         # ---------------------------------------------------------------
         # TAB 2: Issue Clusters
@@ -181,8 +187,8 @@ class ExcelReportGenerator:
         ws_pages = wb.create_sheet(title="All Evaluated Pages")
         headers_pages = [
             "URL", "Status", "Technical Classification", "Content Type", "Is Indexable", "Indexability Reason",
-            "Internal Inlinks", "Internal Outlinks", "External Outlinks", "TTFB (ms)", "Word Count",
-            "H1 Count", "Title", "Meta Description", "Canonical URL", "Has Viewport", "Images Count"
+            "Canonical State", "Canonical URL", "Internal Inlinks", "Internal Outlinks", "External Outlinks",
+            "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport", "Images Count"
         ]
         for c_idx, h in enumerate(headers_pages, start=1):
             cell = ws_pages.cell(row=1, column=c_idx, value=h)
@@ -196,6 +202,8 @@ class ExcelReportGenerator:
                 in_inlinks = getattr(page, "internal_inlinks_count", getattr(page, "inlinks_count", 0))
                 in_outlinks = getattr(page, "internal_outlinks_count", len(page.internal_links))
                 ex_outlinks = getattr(page, "external_outlinks_count", len(page.external_links))
+                canon_state = getattr(page, "canonical_state", None)
+                canon_state_val = canon_state.value if hasattr(canon_state, "value") else str(canon_state or "missing")
 
                 ws_pages.cell(row=r_idx, column=1, value=page.url)
                 ws_pages.cell(row=r_idx, column=2, value=page.status_code)
@@ -203,22 +211,23 @@ class ExcelReportGenerator:
                 ws_pages.cell(row=r_idx, column=4, value=page.content_type)
                 ws_pages.cell(row=r_idx, column=5, value="Yes" if page.is_indexable else "No")
                 ws_pages.cell(row=r_idx, column=6, value=page.indexability_reason or ("Indexable" if page.is_indexable else "Non-indexable"))
-                ws_pages.cell(row=r_idx, column=7, value=in_inlinks)
-                ws_pages.cell(row=r_idx, column=8, value=in_outlinks)
-                ws_pages.cell(row=r_idx, column=9, value=ex_outlinks)
-                ws_pages.cell(row=r_idx, column=10, value=round(page.response_time_ms, 1))
-                ws_pages.cell(row=r_idx, column=11, value=page.word_count)
-                ws_pages.cell(row=r_idx, column=12, value=len(page.h1_tags))
-                ws_pages.cell(row=r_idx, column=13, value=page.title)
-                ws_pages.cell(row=r_idx, column=14, value=page.meta_description)
-                ws_pages.cell(row=r_idx, column=15, value=page.canonical_url or "")
-                ws_pages.cell(row=r_idx, column=16, value="Yes" if page.has_viewport else "No")
-                ws_pages.cell(row=r_idx, column=17, value=len(page.images))
+                ws_pages.cell(row=r_idx, column=7, value=canon_state_val)
+                ws_pages.cell(row=r_idx, column=8, value=page.canonical_url or "")
+                ws_pages.cell(row=r_idx, column=9, value=in_inlinks)
+                ws_pages.cell(row=r_idx, column=10, value=in_outlinks)
+                ws_pages.cell(row=r_idx, column=11, value=ex_outlinks)
+                ws_pages.cell(row=r_idx, column=12, value=round(page.response_time_ms, 1))
+                ws_pages.cell(row=r_idx, column=13, value=page.word_count)
+                ws_pages.cell(row=r_idx, column=14, value=len(page.h1_tags))
+                ws_pages.cell(row=r_idx, column=15, value=page.title)
+                ws_pages.cell(row=r_idx, column=16, value=page.meta_description)
+                ws_pages.cell(row=r_idx, column=17, value="Yes" if page.has_viewport else "No")
+                ws_pages.cell(row=r_idx, column=18, value=len(page.images))
 
-                for c in range(1, 18):
+                for c in range(1, 19):
                     ws_pages.cell(row=r_idx, column=c).border = self.border
 
-        self._apply_table_styling(ws_pages, 1, 17)
+        self._apply_table_styling(ws_pages, 1, 18)
 
         # ---------------------------------------------------------------
         # TAB 4: Orphaned Pages
@@ -245,23 +254,34 @@ class ExcelReportGenerator:
         # TAB 5: Internal Link Graph
         # ---------------------------------------------------------------
         ws_links = wb.create_sheet(title="Internal Link Graph")
-        headers_links = ["Source URL", "Target URL", "Anchor Text"]
+        headers_links = ["Source URL", "Target URL", "Anchor Text", "Link Location"]
         for c_idx, h in enumerate(headers_links, start=1):
             cell = ws_links.cell(row=1, column=c_idx, value=h)
             cell.font = self.header_font
             cell.fill = self.header_fill
 
         row_counter = 2
-        if report.crawl_result and report.crawl_result.link_graph:
-            for src, targets in list(report.crawl_result.link_graph.items())[:500]:
-                for tgt, anchor in targets:
-                    ws_links.cell(row=row_counter, column=1, value=src)
-                    ws_links.cell(row=row_counter, column=2, value=tgt)
-                    ws_links.cell(row=row_counter, column=3, value=anchor)
-                    for c in range(1, 4):
-                        ws_links.cell(row=row_counter, column=c).border = self.border
-                    row_counter += 1
+        if report.crawl_result and report.crawl_result.pages:
+            seen_edges = set()
+            for p in report.crawl_result.pages:
+                src = p.final_url or p.url
+                for link in p.internal_links:
+                    tgt = (link.href or link.url or "").strip()
+                    if not tgt:
+                        continue
+                    anchor = (link.anchor_text or link.anchor or "").strip()
+                    loc = getattr(link, "location", "body")
+                    edge_key = (src, tgt, anchor, loc)
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        ws_links.cell(row=row_counter, column=1, value=src)
+                        ws_links.cell(row=row_counter, column=2, value=tgt)
+                        ws_links.cell(row=row_counter, column=3, value=anchor)
+                        ws_links.cell(row=row_counter, column=4, value=loc)
+                        for c in range(1, 5):
+                            ws_links.cell(row=row_counter, column=c).border = self.border
+                        row_counter += 1
 
-        self._apply_table_styling(ws_links, 1, 3)
+        self._apply_table_styling(ws_links, 1, 4)
 
         wb.save(filepath)

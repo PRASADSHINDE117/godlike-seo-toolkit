@@ -64,6 +64,26 @@ class HTMLReportGenerator:
         crawl_time = crawl_config.started_at[:19].replace("T", " ") if crawl_config else report.generated_at[:19].replace("T", " ")
         js_status = "Enabled" if (crawl_config and crawl_config.js_rendering_enabled) else "HTTP (Static DOM)"
 
+        status_banner_html = ""
+        if report.audit_status == "INDEXATION_BLOCKED":
+            status_banner_html = f"""
+            <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #EF4444; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FCA5A5; font-size: 0.92rem;">
+                <strong style="color: #EF4444;">🚨 CRITICAL RELEASE BLOCKER:</strong> {html.escape(report.status_message)}
+            </div>
+            """
+        elif report.audit_status == "STAGING_PROTECTED":
+            status_banner_html = f"""
+            <div style="background: rgba(59, 130, 246, 0.15); border: 1px solid #3B82F6; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #93C5FD; font-size: 0.92rem;">
+                <strong style="color: #60A5FA;">🛡️ STAGING ENVIRONMENT:</strong> {html.escape(report.status_message)}
+            </div>
+            """
+        elif report.audit_status == "NEEDS_REVIEW":
+            status_banner_html = f"""
+            <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FDE68A; font-size: 0.92rem;">
+                <strong style="color: #F59E0B;">⚠️ AUDIT REQUIRES ATTENTION:</strong> {html.escape(report.status_message)}
+            </div>
+            """
+
         # Category Score Bars & Deductions
         cat_bars_html = ""
         scoring_breakdown_html = ""
@@ -195,9 +215,13 @@ class HTMLReportGenerator:
             """
 
         # Orphaned Pages Table
-        orphans_html = ""
+        crawled_pages = report.crawl_result.pages if report.crawl_result else []
+        eligible_indexable = [p for p in crawled_pages if p.is_indexable and p.status_code == 200]
         orphaned_list = report.crawl_result.orphaned_pages if report.crawl_result else []
-        if orphaned_list:
+        orphans_html = ""
+        if not eligible_indexable:
+            orphans_html = "<tr><td colspan='3' style='text-align: center; color: #94A3B8;'>⚪ Orphan analysis NOT APPLICABLE: 0 public pages are indexable (sitewide noindex active).</td></tr>"
+        elif orphaned_list:
             for orphan in orphaned_list:
                 orphans_html += f"""
                 <tr>
@@ -211,7 +235,6 @@ class HTMLReportGenerator:
 
         # Crawled Pages Inventory Table
         inventory_html = ""
-        crawled_pages = report.crawl_result.pages if report.crawl_result else []
         for p in crawled_pages:
             pt = getattr(p, "page_type", None)
             pt_val = pt.value if hasattr(pt, "value") else str(pt or "public_content")
@@ -495,9 +518,11 @@ class HTMLReportGenerator:
                 <p>Diagnostic evaluation for <strong>{html.escape(report.url)}</strong></p>
             </div>
             <div>
-                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.0</span>
+                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.1</span>
             </div>
         </header>
+
+        {status_banner_html}
 
         <!-- Crawl Configuration Metadata -->
         <div class="config-bar">

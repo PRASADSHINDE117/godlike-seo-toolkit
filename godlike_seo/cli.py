@@ -48,9 +48,9 @@ DEFAULT_AUTH_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath
 
 
 @click.group()
-@click.version_option(version="3.0.0", prog_name="godlike-seo")
+@click.version_option(version="3.1.0", prog_name="godlike-seo")
 def cli():
-    """⚡ Godlike SEO Engine 3.0 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
+    """⚡ Godlike SEO Engine 3.1 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
     pass
 
 
@@ -62,6 +62,8 @@ def cli():
 @click.option("--format", "-f", "output_format", type=click.Choice(["all", "html", "md", "xlsx", "json"]), default="all", help="Report format (all, html, md, xlsx, json).")
 @click.option("--output", "-o", default=None, help="Filepath to save report.")
 @click.option("--output-dir", default=None, help="Directory to save generated reports.")
+@click.option("--environment", "-e", type=click.Choice(["production", "staging", "development", "unknown"]), default=None, help="Target environment intent. When 'staging', sitewide noindex is treated as expected protection.")
+@click.option("--render-js", is_flag=True, default=False, help="Enable selective headless Playwright JS rendering.")
 @click.option("--keyword", "-k", default=None, help="Target keyword to run competitive SERP benchmark against.")
 @click.option("--auth-file", default=None, help="Path to credentials file (e.g. 'user details/user info.txt').")
 @click.option("--login-url", default=None, help="Login page URL to authenticate via Playwright before crawling.")
@@ -77,6 +79,8 @@ def crawl(
     output_format: str,
     output: Optional[str],
     output_dir: Optional[str],
+    environment: Optional[str],
+    render_js: bool,
     keyword: Optional[str],
     auth_file: Optional[str],
     login_url: Optional[str],
@@ -106,11 +110,17 @@ def crawl(
     if not quiet:
         auth_msg = " [bold green](Authenticated via Playwright)[/]" if has_auth else ""
         console.print(Panel.fit(
-            f"[bold cyan]Godlike SEO Engine 3.0[/bold cyan]{auth_msg}\nTarget: [yellow]{url}[/yellow] | Max Pages: {max_pages} | Concurrency: {concurrency}",
+            f"[bold cyan]Godlike SEO Engine 3.1[/bold cyan]{auth_msg}\nTarget: [yellow]{url}[/yellow] | Max Pages: {max_pages} | Concurrency: {concurrency} | Env: {environment or 'auto'}",
             border_style="cyan"
         ))
 
-    config = CrawlerConfig(max_pages=max_pages, max_depth=depth, concurrency=concurrency)
+    config = CrawlerConfig(
+        max_pages=max_pages,
+        max_depth=depth,
+        concurrency=concurrency,
+        environment=environment,
+        render_js=render_js,
+    )
     crawler = SEOCrawler(config=config, auth_config=auth_cfg if has_auth else None)
 
     if not quiet:
@@ -125,7 +135,7 @@ def crawl(
     else:
         crawl_result: CrawlResult = asyncio.run(crawler.crawl(url))
 
-    report_gen = ReportGenerator()
+    report_gen = ReportGenerator(environment=environment)
     comp_analyses = []
     if keyword:
         if not quiet:
@@ -134,20 +144,24 @@ def crawl(
         comp = analyzer.analyze_for_keyword(target_keyword=keyword, your_url=url)
         comp_analyses.append(comp)
 
-    report: SEOReport = report_gen.generate_report(crawl_result, competitor_analyses=comp_analyses)
+    report: SEOReport = report_gen.generate_report(crawl_result, competitor_analyses=comp_analyses, environment=environment)
 
     # CLI Terminal Display
     if not quiet and output_format != "json":
         score_color = "green" if report.overall_score >= 85 else ("yellow" if report.overall_score >= 65 else "red")
         stats = report.summary_stats or {}
+        status_col = "green" if report.audit_status == "PASS" else ("cyan" if report.audit_status == "STAGING_PROTECTED" else "red")
         console.print()
         console.print(Panel.fit(
-            f"Overall Health Score: [bold {score_color}]{report.overall_score:.0f}/100[/bold {score_color}]\n"
+            f"Overall Health Score: [bold {score_color}]{report.overall_score:.0f}/100[/bold {score_color}] | Release Status: [bold {status_col}]{report.audit_status}[/] ({report.environment_intent.upper()})\n"
             f"Pages Crawled: {len(crawl_result.pages)} | Unique Issue Clusters: [bold]{stats.get('unique_issue_clusters', 0)}[/bold] | Raw Occurrences: {stats.get('total_raw_occurrences', 0)}\n"
             f"Critical Blockers: [bold {'red' if stats.get('critical_clusters_count', 0) > 0 else 'green'}]{stats.get('critical_clusters_count', 0)}[/] | Orphaned Pages: {len(crawl_result.orphaned_pages)}",
             title="[bold]Diagnostic Summary[/bold]",
             border_style=score_color,
         ))
+        if report.audit_status in ("INDEXATION_BLOCKED", "STAGING_PROTECTED"):
+            msg_col = "red" if report.audit_status == "INDEXATION_BLOCKED" else "cyan"
+            console.print(Panel(f"[{msg_col}]{report.status_message}[/]", border_style=msg_col))
 
         cat_table = Table(title="Category Evaluation & Scoring", show_header=True, header_style="bold magenta")
         cat_table.add_column("Category", style="cyan")

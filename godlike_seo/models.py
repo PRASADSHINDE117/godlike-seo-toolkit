@@ -63,13 +63,23 @@ class IssueCategory(str, Enum):
     SOCIAL = "social"
 
 
-class CrawlStatus(str, Enum):
-    """Status of a crawl job."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+class CanonicalState(str, Enum):
+    """Explicit taxonomy of canonical URL declarations."""
+    MISSING = "missing"                      # No <link rel="canonical"> tag or HTTP Link header found
+    SELF_REFERENCING = "self_referencing"    # Declares exact match to requested / normalized final URL
+    CROSS_URL = "cross_url"                  # Declares different internal or external URL
+    RELATIVE = "relative"                    # Declares relative path instead of absolute URL
+    MULTIPLE = "multiple"                    # Multiple conflicting canonical directives declared
+    INVALID = "invalid"                      # Malformed URL or non-HTTP scheme
+
+
+class CheckStatus(str, Enum):
+    """Audit rule execution ledger status."""
+    PASS = "pass"
+    FAIL = "fail"
+    SKIPPED = "skipped"
+    NOT_APPLICABLE = "not_applicable"
+    INCONCLUSIVE = "inconclusive"
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +106,29 @@ class DictCompatible:
 
     def __contains__(self, key: str) -> bool:
         return hasattr(self, key) or key in getattr(self, "_aliases", {})
+
+
+@dataclass
+class CheckResult(DictCompatible):
+    """A single deterministic audit rule execution entry in the ledger."""
+    rule_id: str
+    rule_version: str = "3.1"
+    category: IssueCategory = IssueCategory.TECHNICAL
+    status: CheckStatus = CheckStatus.PASS
+    title: str = ""
+    description: str = ""
+    evidence: str = ""
+    affected_count: int = 0
+    affected_urls: List[str] = field(default_factory=list)
+
+
+class CrawlStatus(str, Enum):
+    """Status of a crawl job."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 # ---------------------------------------------------------------------------
@@ -319,11 +352,16 @@ class PageData(DictCompatible):
 
     # Indexability & Directives
     is_indexable: bool = True
-    indexability_reason: str = "Indexable (200 OK, self-canonical, no blocking directives)"
+    indexability_reason: str = "Indexable (200 OK, no blocking directives)"
     x_robots_tag: str = ""
-    is_self_canonical: bool = True
+    is_self_canonical: bool = False
+    canonical_state: CanonicalState = CanonicalState.MISSING
     found_in_sitemap: bool = False
     is_orphaned: bool = False
+
+    # Rendering & DOM snapshots
+    rendered_dom: Optional[str] = None
+    render_status: str = "static_http"
 
     # Error info
     error: Optional[str] = None
@@ -425,6 +463,7 @@ class CrawlResult(DictCompatible):
     sitemap_urls: List[str] = field(default_factory=list)
     orphaned_pages: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    environment: Optional[str] = None
 
     # Link graph: source_url -> [(target_url, anchor_text)]
     link_graph: Dict[str, List[tuple]] = field(default_factory=dict)
@@ -455,6 +494,7 @@ class SEOIssue(DictCompatible):
     title: str = ""
     description: str = ""
     affected_url: str = ""
+    affected_urls: List[str] = field(default_factory=list)
     evidence: str = ""
     observation: str = ""              # Concrete, objective, measurable fact
     inference: str = ""                # Contextual SEO risk/interpretation
@@ -470,6 +510,11 @@ class SEOIssue(DictCompatible):
     detected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def __post_init__(self):
+        if not self.affected_urls and self.affected_url:
+            self.affected_urls = [self.affected_url]
+        elif not self.affected_url and self.affected_urls:
+            self.affected_url = self.affected_urls[0]
+
         if not self.affected_url and self.url:
             self.affected_url = self.url
         elif not self.url and self.affected_url:
@@ -653,8 +698,11 @@ class CategoryScore(DictCompatible):
     weight: float = 1.0
     tests_evaluated: int = 0
     tests_passed: int = 0
+    tests_skipped: int = 0
+    tests_not_applicable: int = 0
     deductions: List[ScoreDeduction] = field(default_factory=list)
-    status: str = "PASSED"            # "PASSED", "WARNING", "FAILED", "NOT_TESTED"
+    check_results: List[CheckResult] = field(default_factory=list)
+    status: str = "PASSED"            # "PASSED", "WARNING", "FAILED", "NOT_TESTED", "NOT_APPLICABLE"
 
 
 @dataclass
@@ -669,6 +717,12 @@ class SEOReport(DictCompatible):
     overall_score: float = 0.0
     category_scores: Dict[str, CategoryScore] = field(default_factory=dict)
     all_deductions: List[ScoreDeduction] = field(default_factory=list)
+
+    # Release gate status and environment intent
+    audit_status: str = "PASS"        # "PASS", "INDEXATION_BLOCKED", "STAGING_PROTECTED", "NEEDS_REVIEW", "PARTIAL"
+    status_message: str = ""
+    environment_intent: str = "unknown"  # "production", "staging", "development", "unknown"
+    check_ledger: List[CheckResult] = field(default_factory=list)
 
     # Issue clustering
     issue_clusters: List[IssueCluster] = field(default_factory=list)

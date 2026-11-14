@@ -37,9 +37,11 @@ GENERIC_ANCHOR_TEXTS: Set[str] = {
 @dataclass
 class PageLinkStats:
     url: str
-    inlinks_count: int = 0
-    outlinks_count: int = 0
-    pagerank_score: float = 0.0  # 0 to 100
+    inlinks_count: int = 0          # Total inbound occurrences
+    unique_inlinks_count: int = 0   # Unique source pages
+    outlinks_count: int = 0         # Total outbound occurrences
+    unique_outlinks_count: int = 0  # Unique target pages
+    pagerank_score: float = 0.0     # 0 to 100
     crawl_depth: int = 0
     is_orphaned: bool = False
     is_dead_end: bool = False
@@ -112,8 +114,19 @@ class LinkAnalyzer:
         return scaled
 
     def analyze(self, pages: List[PageData]) -> Dict[str, Any]:
-        """Perform full link graph and internal PageRank analysis."""
+        """Perform full link graph and internal PageRank analysis with alias-resolved topology."""
         nodes: Set[str] = {p.final_url or p.url for p in pages}
+        
+        # Build bidirectional alias resolution map so redirect targets and variations
+        # attribute inbound links directly to the canonical crawled page node.
+        url_to_node: Dict[str, str] = {}
+        for p in pages:
+            primary = p.final_url or p.url
+            url_to_node[p.url] = primary
+            url_to_node[primary] = primary
+            url_to_node[p.url.rstrip("/")] = primary
+            url_to_node[primary.rstrip("/")] = primary
+
         adj_list: Dict[str, Set[str]] = collections.defaultdict(set)
         inbound_anchors: Dict[str, List[str]] = collections.defaultdict(list)
         inbound_details: Dict[str, List[Dict[str, Any]]] = collections.defaultdict(list)
@@ -124,20 +137,34 @@ class LinkAnalyzer:
         for p in pages:
             src = p.final_url or p.url
             for link in p.internal_links:
-                tgt = link.href or link.url
-                if tgt:
-                    adj_list[src].add(tgt)
-                    anchor = (link.anchor_text or link.anchor or "").strip()
-                    loc = getattr(link, "location", "body")
-                    outbound_internal_edges[src].append((tgt, anchor, loc))
-                    inbound_anchors[tgt].append(anchor)
-                    inbound_details[tgt].append({
-                        "source": src,
-                        "anchor": anchor,
-                        "location": loc,
-                    })
-                    if anchor.lower() in GENERIC_ANCHOR_TEXTS:
-                        generic_anchor_issues.append((src, tgt, anchor))
+                raw_tgt = (link.href or link.url or "").strip()
+                if not raw_tgt:
+                    continue
+
+                # Resolve redirect aliases and trailing-slash variants to primary node
+                resolved_tgt = url_to_node.get(raw_tgt) or url_to_node.get(raw_tgt.rstrip("/"))
+                if not resolved_tgt:
+                    for n in nodes:
+                        if are_urls_equivalent(n, raw_tgt):
+                            resolved_tgt = n
+                            break
+                if not resolved_tgt:
+                    resolved_tgt = raw_tgt
+
+                adj_list[src].add(resolved_tgt)
+                anchor = (link.anchor_text or link.anchor or "").strip()
+                loc = getattr(link, "location", "body")
+                outbound_internal_edges[src].append((resolved_tgt, anchor, loc))
+                inbound_anchors[resolved_tgt].append(anchor)
+                inbound_details[resolved_tgt].append({
+                    "source": src,
+                    "anchor": anchor,
+                    "location": loc,
+                    "target_url": resolved_tgt,
+                    "raw_target": raw_tgt,
+                })
+                if anchor.lower() in GENERIC_ANCHOR_TEXTS:
+                    generic_anchor_issues.append((src, resolved_tgt, anchor))
 
         pagerank_scores = self.calculate_pagerank(nodes, adj_list)
 
@@ -148,9 +175,22 @@ class LinkAnalyzer:
 
         root_url = pages[0].final_url or pages[0].url if pages else ""
 
+        # Context-Aware Orphan Analysis:
+        # Check if any public indexable HTML pages exist in crawl scope
+        eligible_public_indexable = [
+            p for p in pages
+            if p.status_code == 200
+            and p.is_indexable
+            and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT
+            and not getattr(p, "is_auth_gate", False)
+        ]
+        orphan_check_applicable = len(eligible_public_indexable) > 0
+
         for p in pages:
             url = p.final_url or p.url
-            in_internal_count = len(inbound_details.get(url, []))
+            in_details = inbound_details.get(url, [])
+            in_internal_count = len(in_details)
+            unique_in_sources = len({d["source"] for d in in_details})
             out_internal_count = len(p.internal_links)
             out_unique_targets = len(adj_list.get(url, set()))
 
@@ -158,21 +198,19 @@ class LinkAnalyzer:
             p.internal_inlinks_count = in_internal_count
             p.internal_outlinks_count = out_internal_count
             p.external_outlinks_count = len(p.external_links)
-            p.inbound_link_details = inbound_details.get(url, [])
+            p.inbound_link_details = in_details
 
             pr = pagerank_scores.get(url, 10.0)
 
             # Context-Aware Orphan Analysis:
             # Strictly an indexable PUBLIC_CONTENT document (status 200, not auth gate)
             # that receives 0 internal inlinks and is not the root homepage.
-            is_orphan = (
-                in_internal_count == 0
-                and not are_urls_equivalent(url, root_url)
-                and p.status_code == 200
-                and p.is_indexable
-                and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT
-                and not getattr(p, "is_auth_gate", False)
-            )
+            # If 0 pages on the site are indexable, orphan check is NOT_APPLICABLE.
+            is_orphan = False
+            if orphan_check_applicable and p in eligible_public_indexable:
+                if in_internal_count == 0 and not are_urls_equivalent(url, root_url):
+                    is_orphan = True
+                    orphaned_pages.append(url)
 
             # Dead-end check: Only for public content pages that have actual content
             is_dead = (
@@ -183,17 +221,19 @@ class LinkAnalyzer:
                 and p.word_count >= 100
             )
 
-            if is_orphan:
-                orphaned_pages.append(url)
             if is_dead:
                 dead_ends.append(url)
             if p.crawl_depth >= 4 and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT:
                 deep_pages.append(url)
 
+            p.is_orphaned = is_orphan
+
             page_stats[url] = PageLinkStats(
                 url=url,
                 inlinks_count=in_internal_count,
+                unique_inlinks_count=unique_in_sources,
                 outlinks_count=out_internal_count,
+                unique_outlinks_count=out_unique_targets,
                 pagerank_score=pr,
                 crawl_depth=p.crawl_depth,
                 is_orphaned=is_orphan,
@@ -272,4 +312,7 @@ class LinkAnalyzer:
                 page_stats.values(), key=lambda s: s.pagerank_score, reverse=True
             )[:10],
             "issues": issues,
+            "orphan_check_applicable": orphan_check_applicable,
+            "eligible_indexable_count": len(eligible_public_indexable),
+            "inbound_details": inbound_details,
         }
