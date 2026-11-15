@@ -176,7 +176,13 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <h3>Enter Website URL</h3>
                 <div class="input-group">
                     <input type="url" id="crawl-url" placeholder="https://example.com" value="https://example.com" required>
-                    <input type="number" id="crawl-max" placeholder="Max Pages" value="20" style="max-width: 130px;">
+                    <select id="crawl-env" style="max-width: 160px;">
+                        <option value="">Env: Auto-Detect</option>
+                        <option value="production">Production</option>
+                        <option value="staging">Staging</option>
+                        <option value="development">Development</option>
+                    </select>
+                    <input type="number" id="crawl-max" placeholder="Max Pages" value="20" style="max-width: 120px;">
                     <button onclick="startCrawl()">Run Full Audit</button>
                 </div>
                 <div id="crawl-progress" style="margin-top: 15px; display: none; color: var(--primary);">
@@ -243,6 +249,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         async function startCrawl() {
             const url = document.getElementById('crawl-url').value;
             const maxPages = document.getElementById('crawl-max').value;
+            const env = document.getElementById('crawl-env').value;
             document.getElementById('crawl-progress').style.display = 'block';
             document.getElementById('crawl-results').style.display = 'none';
 
@@ -250,14 +257,28 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 const res = await fetch('/api/crawl', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({url: url, max_pages: parseInt(maxPages)})
+                    body: JSON.stringify({url: url, max_pages: parseInt(maxPages), environment: env || null})
                 });
                 const data = await res.json();
                 document.getElementById('crawl-progress').style.display = 'none';
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
                 document.getElementById('crawl-results').style.display = 'block';
+
+                let statusBadgeCol = '#10B981';
+                if ((data.audit_status || '').includes('BLOCKED')) statusBadgeCol = '#EF4444';
+                else if (['NEEDS_REVIEW', 'INSUFFICIENT_COVERAGE', 'INDEXATION_WARNING'].includes(data.audit_status)) statusBadgeCol = '#F59E0B';
+                else if (data.audit_status === 'STAGING_PROTECTED') statusBadgeCol = '#60A5FA';
+
                 document.getElementById('crawl-summary').innerHTML = `
-                    <p style="font-size: 1.2rem; margin: 10px 0;"><strong>Overall Score:</strong> ${data.overall_score}/100</p>
-                    <p><strong>Pages Crawled:</strong> ${data.summary_stats.total_pages_crawled} | <strong>Orphaned:</strong> ${data.summary_stats.orphaned_pages_count} | <strong>Critical Issues:</strong> ${data.summary_stats.critical_issues_count}</p>
+                    <div style="display: flex; gap: 15px; align-items: center; margin: 12px 0;">
+                        <span style="font-size: 1.6rem; font-weight: 800; color: ${data.overall_score >= 85 ? '#10B981' : (data.overall_score >= 65 ? '#F59E0B' : '#EF4444')};">${data.overall_score}/100</span>
+                        <span style="background: rgba(255,255,255,0.08); border: 1px solid ${statusBadgeCol}; color: ${statusBadgeCol}; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85rem;">${data.audit_status}</span>
+                    </div>
+                    <p style="color: #94A3B8; font-size: 0.9rem; margin-bottom: 8px;">${data.status_message}</p>
+                    <p style="font-size: 0.88rem; color: #CBD5E1;"><strong>Pages Crawled:</strong> ${data.summary_stats.total_pages_crawled} | <strong>Coverage:</strong> ${data.summary_stats.crawl_coverage_pct || 100}% | <strong>Orphaned:</strong> ${data.summary_stats.orphaned_pages_count} | <strong>Critical Issues:</strong> ${data.summary_stats.critical_issues_count}</p>
                 `;
                 document.getElementById('report-link').href = '/report/' + data.domain;
             } catch(e) {
@@ -340,22 +361,25 @@ def api_crawl():
     payload = request.get_json() or {}
     url = payload.get("url", "https://example.com").strip()
     max_pages = min(int(payload.get("max_pages", 20)), 200)
+    environment = payload.get("environment")
 
     is_safe, err_msg = is_safe_target_url(url)
     if not is_safe:
         return jsonify({"error": f"SSRF Protection: {err_msg}"}), 400
 
-    crawler = SEOCrawler(config=CrawlerConfig(max_pages=max_pages, max_depth=2, concurrency=5))
+    crawler = SEOCrawler(config=CrawlerConfig(max_pages=max_pages, max_depth=2, concurrency=5, environment=environment))
     crawl_result = asyncio.run(crawler.crawl(url))
 
-    report_gen = ReportGenerator()
-    report = report_gen.generate_report(crawl_result)
+    report_gen = ReportGenerator(environment=environment)
+    report = report_gen.generate_report(crawl_result, environment=environment)
 
     REPORTS_CACHE[report.domain] = report
 
     return jsonify({
         "domain": report.domain,
         "overall_score": report.overall_score,
+        "audit_status": report.audit_status,
+        "status_message": report.status_message,
         "summary_stats": report.summary_stats,
         "recommendations": report.recommendations[:5],
     })

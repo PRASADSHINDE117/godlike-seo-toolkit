@@ -68,9 +68,19 @@ class ExcelReportGenerator:
         ws_summary["A2"] = f"Target: {report.url} | Domain: {report.domain} | Generated: {report.generated_at[:19]} UTC"
         ws_summary["A2"].font = Font(name="Calibri", size=10, italic=True, color="64748B")
 
-        status_color = "16A34A" if report.audit_status == "PASS" else ("2563EB" if report.audit_status == "STAGING_PROTECTED" else "DC2626")
+        if report.audit_status == "PASS":
+            status_color = "16A34A"
+        elif report.audit_status == "STAGING_PROTECTED":
+            status_color = "2563EB"
+        elif report.audit_status in ("NEEDS_REVIEW", "INSUFFICIENT_COVERAGE", "INDEXATION_WARNING", "INCONCLUSIVE"):
+            status_color = "D97706"
+        else:
+            status_color = "DC2626"
+
         ws_summary["A3"] = f"Release Status: {report.audit_status} | Environment: {report.environment_intent.upper()}"
         ws_summary["A3"].font = Font(name="Calibri", size=11, bold=True, color=status_color)
+        ws_summary["A4"] = f"Verdict: {report.status_message}"
+        ws_summary["A4"].font = Font(name="Calibri", size=10, italic=True, color="475569")
 
         # Key Metrics Block
         metrics = [
@@ -344,5 +354,43 @@ class ExcelReportGenerator:
                     ws_tasks.cell(row=r_idx, column=c).border = self.border
 
             self._apply_table_styling(ws_tasks, 1, 10)
+
+        # ---------------------------------------------------------------
+        # TAB 7: Deterministic Check Execution Ledger
+        # ---------------------------------------------------------------
+        ledger = getattr(report, "check_ledger", [])
+        if ledger:
+            ws_ledger = wb.create_sheet(title="Check Ledger")
+            headers_ledger = ["Rule ID", "Category", "Rule Title", "Status", "Affected Count", "Execution Evidence & Scope"]
+            for c_idx, h in enumerate(headers_ledger, start=1):
+                cell = ws_ledger.cell(row=1, column=c_idx, value=h)
+                cell.font = self.header_font
+                cell.fill = self.header_fill
+
+            for r_idx, cr in enumerate(ledger, start=2):
+                st = cr.status.value.upper() if hasattr(cr.status, "value") else str(cr.status).upper()
+                cat_str = cr.category.value.replace("_", " ").title() if hasattr(cr.category, "value") else str(cr.category).title()
+
+                ws_ledger.cell(row=r_idx, column=1, value=cr.rule_id).font = self.bold_font
+                ws_ledger.cell(row=r_idx, column=2, value=cat_str)
+                ws_ledger.cell(row=r_idx, column=3, value=cr.title)
+                status_cell = ws_ledger.cell(row=r_idx, column=4, value=st)
+                status_cell.font = self.bold_font
+                ws_ledger.cell(row=r_idx, column=5, value=cr.affected_count)
+                ws_ledger.cell(row=r_idx, column=6, value=cr.evidence)
+
+                if st == "PASS":
+                    status_cell.fill = self.low_fill
+                elif st == "FAIL":
+                    status_cell.fill = self.crit_fill
+                elif st == "SKIPPED":
+                    status_cell.fill = self.med_fill
+                elif st == "NOT_APPLICABLE":
+                    status_cell.fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+
+                for c in range(1, 7):
+                    ws_ledger.cell(row=r_idx, column=c).border = self.border
+
+            self._apply_table_styling(ws_ledger, 1, 6)
 
         wb.save(filepath)

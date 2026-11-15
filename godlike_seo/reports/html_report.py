@@ -78,10 +78,28 @@ class HTMLReportGenerator:
                 <strong style="color: #60A5FA;">🛡️ STAGING ENVIRONMENT:</strong> {html.escape(report.status_message)}
             </div>
             """
+        elif report.audit_status == "INSUFFICIENT_COVERAGE":
+            status_banner_html = f"""
+            <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FDE68A; font-size: 0.92rem;">
+                <strong style="color: #F59E0B;">⚠️ INSUFFICIENT CRAWL COVERAGE:</strong> {html.escape(report.status_message)}
+            </div>
+            """
+        elif report.audit_status == "INDEXATION_WARNING":
+            status_banner_html = f"""
+            <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FDE68A; font-size: 0.92rem;">
+                <strong style="color: #F59E0B;">⚠️ ENVIRONMENT UNCONFIRMED / INDEXATION WARNING:</strong> {html.escape(report.status_message)}
+            </div>
+            """
         elif report.audit_status == "NEEDS_REVIEW":
             status_banner_html = f"""
             <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FDE68A; font-size: 0.92rem;">
                 <strong style="color: #F59E0B;">⚠️ AUDIT REQUIRES ATTENTION (GATED):</strong> {html.escape(report.status_message)}
+            </div>
+            """
+        elif report.audit_status == "INCONCLUSIVE":
+            status_banner_html = f"""
+            <div style="background: rgba(148, 163, 184, 0.15); border: 1px solid #94A3B8; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #CBD5E1; font-size: 0.92rem;">
+                <strong style="color: #94A3B8;">ℹ️ AUDIT INCONCLUSIVE:</strong> {html.escape(report.status_message)}
             </div>
             """
         elif report.audit_status == "PASS":
@@ -94,6 +112,34 @@ class HTMLReportGenerator:
         # Category Score Bars & Deductions
         cat_bars_html = ""
         scoring_breakdown_html = ""
+
+        # Deterministic Check Execution Ledger Rows
+        ledger_rows_html = ""
+        for item in getattr(report, "check_ledger", []):
+            st = item.status.value.lower() if hasattr(item.status, "value") else str(item.status).lower()
+            if st == "pass":
+                badge = '<span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid #10B981;">PASS</span>'
+            elif st == "fail":
+                badge = '<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #EF4444; border: 1px solid #EF4444;">FAIL</span>'
+            elif st == "skipped":
+                badge = '<span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #F59E0B; border: 1px solid #F59E0B;">SKIPPED</span>'
+            elif st == "not_applicable":
+                badge = '<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: #94A3B8; border: 1px solid #94A3B8;">NOT APPLICABLE</span>'
+            else:
+                badge = f'<span class="badge">{html.escape(st.upper())}</span>'
+
+            cat_str = item.category.value.replace("_", " ").title() if hasattr(item.category, "value") else str(item.category).title()
+            aff_str = f" <small style='color: #EF4444;'>({item.affected_count} affected)</small>" if item.affected_count > 0 else ""
+
+            ledger_rows_html += f"""
+            <tr>
+                <td><code>{html.escape(item.rule_id)}</code></td>
+                <td><span style="color: #94A3B8; font-size: 0.8rem;">{html.escape(cat_str)}</span></td>
+                <td><strong>{html.escape(item.title)}</strong></td>
+                <td>{badge}</td>
+                <td><span style="font-size: 0.85rem; color: #CBD5E1;">{html.escape(item.evidence)}{aff_str}</span></td>
+            </tr>
+            """
 
         for key, cs in report.category_scores.items():
             col = self._get_score_color(cs.score)
@@ -525,7 +571,7 @@ class HTMLReportGenerator:
                 <p>Diagnostic evaluation for <strong>{html.escape(report.url)}</strong></p>
             </div>
             <div>
-                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.3</span>
+                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.3.1</span>
             </div>
         </header>
 
@@ -564,7 +610,7 @@ class HTMLReportGenerator:
             <div class="card score-card">
                 <h3 style="margin-bottom: 8px;">Overall SEO Health</h3>
                 <div style="margin-bottom: 12px;">
-                    <span class="badge" style="background: {'rgba(239, 68, 68, 0.2)' if 'BLOCKED' in report.audit_status else ('rgba(245, 158, 11, 0.2)' if report.audit_status == 'NEEDS_REVIEW' else ('rgba(59, 130, 246, 0.2)' if report.audit_status == 'STAGING_PROTECTED' else 'rgba(16, 185, 129, 0.2)'))}; color: {'#EF4444' if 'BLOCKED' in report.audit_status else ('#F59E0B' if report.audit_status == 'NEEDS_REVIEW' else ('#60A5FA' if report.audit_status == 'STAGING_PROTECTED' else '#10B981'))}; padding: 5px 12px; font-weight: bold; font-size: 0.82rem;">{report.audit_status}</span>
+                    <span class="badge" style="background: {'rgba(239, 68, 68, 0.2)' if ('BLOCKED' in report.audit_status or 'FAIL' in report.audit_status) else ('rgba(245, 158, 11, 0.2)' if report.audit_status in ('NEEDS_REVIEW', 'INSUFFICIENT_COVERAGE', 'INDEXATION_WARNING') else ('rgba(59, 130, 246, 0.2)' if report.audit_status == 'STAGING_PROTECTED' else ('rgba(148, 163, 184, 0.2)' if report.audit_status == 'INCONCLUSIVE' else 'rgba(16, 185, 129, 0.2)')))}; color: {'#EF4444' if ('BLOCKED' in report.audit_status or 'FAIL' in report.audit_status) else ('#F59E0B' if report.audit_status in ('NEEDS_REVIEW', 'INSUFFICIENT_COVERAGE', 'INDEXATION_WARNING') else ('#60A5FA' if report.audit_status == 'STAGING_PROTECTED' else ('#94A3B8' if report.audit_status == 'INCONCLUSIVE' else '#10B981')))}; padding: 5px 12px; font-weight: bold; font-size: 0.82rem;">{report.audit_status}</span>
                 </div>
                 <svg width="180" height="180" class="svg-dial">
                     <circle cx="90" cy="90" r="{radius}" class="dial-bg"></circle>
@@ -593,6 +639,28 @@ class HTMLReportGenerator:
             <div style="font-size: 0.88rem; line-height: 1.8;">
                 {scoring_breakdown_html}
             </div>
+        </div>
+
+        <!-- Deterministic Check Execution Ledger -->
+        <div class="card" style="margin-bottom: 25px;">
+            <h3>📋 Deterministic Check Execution Ledger ({len(getattr(report, "check_ledger", []))} Rules)</h3>
+            <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 15px;">
+                Verified execution ledger of all diagnostic rules. Distinguishes executed passes from skipped prerequisites and non-applicable audits.
+            </p>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 100px;">Rule ID</th>
+                        <th style="width: 130px;">Category</th>
+                        <th style="width: 220px;">Rule Title</th>
+                        <th style="width: 130px;">Status</th>
+                        <th>Execution Evidence & Scope</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {ledger_rows_html}
+                </tbody>
+            </table>
         </div>
 
         <!-- Evidence-Based Finding Cards -->

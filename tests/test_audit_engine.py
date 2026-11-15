@@ -14,6 +14,7 @@ Tests 10 controlled scenarios verifying:
 10. Image missing width/height -> flagged as IMAGE_MISSING_DIMENSIONS (LOW CLS risk).
 """
 
+import os
 import unittest
 from godlike_seo.models import (
     CanonicalState,
@@ -1070,6 +1071,88 @@ class TestSEOAuditEngine(unittest.TestCase):
         # Cross-page duplicate checks (CONTENT-002, ONPAGE-002) must be NOT_APPLICABLE with 1 page
         self.assertEqual(ledger_map["CONTENT-002"].status, CheckStatus.NOT_APPLICABLE)
         self.assertEqual(ledger_map["ONPAGE-002"].status, CheckStatus.NOT_APPLICABLE)
+
+    # Scenario 36: Multi-Format Report Generation (HTML, Markdown, Excel Check Ledger & Statuses)
+    def test_scenario_36_multi_format_report_check_ledger_and_status_rendering(self):
+        import tempfile
+        import openpyxl
+        from godlike_seo.reports.html_report import HTMLReportGenerator
+        from godlike_seo.reports.markdown_report import MarkdownReportGenerator
+        from godlike_seo.reports.excel_report import ExcelReportGenerator
+
+        page = PageData(
+            url="https://multi-format.example.com/",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Multi Format Test",
+            headings=[HeadingData(level=1, text="Heading")],
+            meta_description="A descriptive sentence for validating multi format reporting engines.",
+            word_count=450,
+            has_viewport=True,
+        )
+        crawl = CrawlResult(
+            start_url="https://multi-format.example.com/",
+            pages=[page],
+            pages_discovered_count=1,
+            crawl_coverage_pct=100.0,
+        )
+        report = self.report_gen.generate_report(crawl)
+
+        # 1. HTML Report validation
+        html_gen = HTMLReportGenerator()
+        html_out = html_gen.render(report)
+        self.assertIn("EVIDENCE ENGINE 3.3.1", html_out)
+        self.assertIn("Deterministic Check Execution Ledger", html_out)
+        self.assertIn("TECH-001", html_out)
+        self.assertIn("RELEASE AUDIT PASSED", html_out)
+
+        # 2. Markdown Report validation
+        md_gen = MarkdownReportGenerator()
+        md_out = md_gen.render(report)
+        self.assertIn("Deterministic Check Execution Ledger", md_out)
+        self.assertIn("TECH-001", md_out)
+        self.assertIn("> [!TIP]", md_out)
+
+        # 3. Excel Report validation
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            excel_gen = ExcelReportGenerator()
+            excel_gen.generate(report, tmp_path)
+            wb = openpyxl.load_workbook(tmp_path)
+            self.assertIn("Check Ledger", wb.sheetnames)
+            ws_ledger = wb["Check Ledger"]
+            self.assertEqual(ws_ledger["A1"].value, "Rule ID")
+            self.assertEqual(ws_ledger["A2"].value, "TECH-001")
+            self.assertEqual(ws_ledger["D2"].value, "PASS")
+            # Verify verdict in Summary sheet
+            ws_summary = wb["Summary & Health"]
+            self.assertIn("Verdict:", str(ws_summary["A4"].value))
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    # Scenario 37: Web Dashboard & API Endpoints Verification
+    def test_scenario_37_web_dashboard_routes(self):
+        from godlike_seo.web.app import app
+        client = app.test_client()
+
+        # 1. Dashboard home renders cleanly
+        res = client.get("/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn(b"Deep Site Crawler", res.data)
+
+        # 2. SSRF check on crawl endpoint correctly rejects private/loopback targets
+        res = client.post("/api/crawl", json={"url": "http://127.0.0.1:8080"})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn(b"SSRF Protection", res.data)
+
+        # 3. Keyword explorer API expands terms into structured objects
+        res = client.post("/api/keywords", json={"seed": "seo"})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertIsInstance(data, list)
 
 
 if __name__ == "__main__":

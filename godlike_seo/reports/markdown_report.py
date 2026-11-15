@@ -36,8 +36,14 @@ class MarkdownReportGenerator:
             lines.append(f"> [!CAUTION]\n> **CRITICAL RELEASE BLOCKER:** {report.status_message}\n")
         elif report.audit_status == "STAGING_PROTECTED":
             lines.append(f"> [!NOTE]\n> **STAGING ENVIRONMENT DETECTED:** {report.status_message}\n")
+        elif report.audit_status == "INSUFFICIENT_COVERAGE":
+            lines.append(f"> [!WARNING]\n> **INSUFFICIENT CRAWL COVERAGE:** {report.status_message}\n")
+        elif report.audit_status == "INDEXATION_WARNING":
+            lines.append(f"> [!WARNING]\n> **ENVIRONMENT UNCONFIRMED / INDEXATION WARNING:** {report.status_message}\n")
         elif report.audit_status == "NEEDS_REVIEW":
             lines.append(f"> [!WARNING]\n> **AUDIT REQUIRES REVIEW (GATED):** {report.status_message}\n")
+        elif report.audit_status == "INCONCLUSIVE":
+            lines.append(f"> [!NOTE]\n> **AUDIT INCONCLUSIVE:** {report.status_message}\n")
         elif report.audit_status == "PASS":
             lines.append(f"> [!TIP]\n> **RELEASE AUDIT PASSED:** {report.status_message}\n")
 
@@ -67,6 +73,18 @@ class MarkdownReportGenerator:
             lines.append("### Itemized Point Deductions")
             for d in report.all_deductions:
                 lines.append(f"- **[-{d.points_deducted:.0f} pts]** `{d.rule_title}`: {d.reason} *(Affects {d.affected_count} page(s))*")
+            lines.append("")
+
+        # 3.5 Deterministic Check Execution Ledger
+        if getattr(report, "check_ledger", None):
+            lines.append(f"## 📋 Deterministic Check Execution Ledger ({len(report.check_ledger)} Rules)")
+            lines.append("| Rule ID | Category | Title | Status | Execution Evidence |")
+            lines.append("| :--- | :--- | :--- | :---: | :--- |")
+            for cr in report.check_ledger:
+                st = cr.status.value.upper() if hasattr(cr.status, "value") else str(cr.status).upper()
+                cat_str = cr.category.value.replace("_", " ").title() if hasattr(cr.category, "value") else str(cr.category).title()
+                aff_str = f" ({cr.affected_count} affected)" if cr.affected_count > 0 else ""
+                lines.append(f"| `{cr.rule_id}` | {cat_str} | **{cr.title}** | `{st}` | {cr.evidence}{aff_str} |")
             lines.append("")
 
         # 4. Action Plan for Developers
