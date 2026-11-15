@@ -148,6 +148,7 @@ class ImageData(DictCompatible):
     size: int = 0
     srcset: str = ""
     is_above_fold: bool = False
+    is_decorative: bool = False
     dom_snippet: str = ""
 
     _aliases = {
@@ -299,8 +300,13 @@ class PageData(DictCompatible):
     title: str = ""
     title_count: int = 1
     meta_description: str = ""
+    meta_description_count: int = 1
+    all_meta_descriptions: List[str] = field(default_factory=list)
     meta_robots: str = ""
     robots_meta: str = ""
+    robots_directives: Dict[str, Any] = field(default_factory=dict)
+    is_snippet_blocked: bool = False
+    snippet_blocking_reason: Optional[str] = None
     canonical_url: Optional[str] = None
     canonical_raw_snippet: Optional[str] = None
     viewport_meta: Optional[str] = None
@@ -311,6 +317,8 @@ class PageData(DictCompatible):
 
     # Headings
     headings: List[HeadingData] = field(default_factory=list)
+    source_h1_tags: List[str] = field(default_factory=list)
+    rendered_h1_tags: List[str] = field(default_factory=list)
 
     # Body text metrics
     word_count: int = 0
@@ -730,6 +738,10 @@ class SEOReport(DictCompatible):
 
     # Prioritized action plan
     recommendations: List[str] = field(default_factory=list)
+
+    # AI Agent Remediation & Model Verification Layer (Kev-4B & Deterministic Engine)
+    remediation_plan: Optional[Any] = None
+    verifications: List[Any] = field(default_factory=list)
     summary_stats: Dict[str, Any] = field(default_factory=dict)
 
     # Raw data references

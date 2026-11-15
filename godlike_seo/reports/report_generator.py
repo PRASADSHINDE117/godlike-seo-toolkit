@@ -15,6 +15,7 @@ from godlike_seo.analyzers.content_analyzer import ContentAnalyzer
 from godlike_seo.analyzers.issue_detector import SEOIssueDetector
 from godlike_seo.analyzers.link_analyzer import LinkAnalyzer
 from godlike_seo.analyzers.technical_analyzer import TechnicalAnalyzer
+from godlike_seo.decision_engine import KevDecisionEngine, AgentRemediationPlanner
 from godlike_seo.models import (
     CanonicalState,
     CategoryScore,
@@ -101,6 +102,13 @@ RULE_CATALOG = [
         "description": "Monitors Time to First Byte (TTFB) and ensures server response times remain under 1000ms.",
         "issue_ids": {"SLOW_RESPONSE_TIME"},
     },
+    {
+        "rule_id": "TECH-009",
+        "category": IssueCategory.TECHNICAL,
+        "title": "Search Snippet Previews & Robots Directives",
+        "description": "Verifies that pages do not serve nosnippet or max-snippet:0 blocking search engine preview snippets.",
+        "issue_ids": {"SEARCH_SNIPPET_BLOCKED"},
+    },
 
     # On-Page & Metadata
     {
@@ -120,9 +128,9 @@ RULE_CATALOG = [
     {
         "rule_id": "ONPAGE-003",
         "category": IssueCategory.ON_PAGE,
-        "title": "Meta Description Presence & Length",
-        "description": "Ensures pages have a concise meta description tag between 70 and 160 characters for SERP snippets.",
-        "issue_ids": {"MISSING_META_DESCRIPTION", "META_DESCRIPTION_TOO_LONG"},
+        "title": "Meta Description Presence & Cardinality",
+        "description": "Ensures pages declare exactly one concise meta description tag (70-160 chars) without duplicates.",
+        "issue_ids": {"MISSING_META_DESCRIPTION", "META_DESCRIPTION_TOO_LONG", "MULTIPLE_META_DESCRIPTIONS"},
     },
     {
         "rule_id": "ONPAGE-004",
@@ -147,10 +155,10 @@ RULE_CATALOG = [
     },
     {
         "rule_id": "ONPAGE-007",
-        "category": IssueCategory.ON_PAGE,
-        "title": "Open Graph & Social Metadata",
-        "description": "Checks for complete Open Graph and Twitter Card tags to optimize link previews when shared.",
-        "issue_ids": {"MISSING_OPEN_GRAPH", "MISSING_TWITTER_CARD"},
+        "category": IssueCategory.SOCIAL,
+        "title": "Open Graph & Social Metadata Consistency",
+        "description": "Validates Open Graph tags, ensuring og:url is well-formed, matches canonical URL, and provides rich social previews.",
+        "issue_ids": {"MALFORMED_OG_URL", "OG_URL_CANONICAL_MISMATCH", "MISSING_OG_TITLE", "MISSING_OPEN_GRAPH", "MISSING_TWITTER_CARD"},
     },
     {
         "rule_id": "ONPAGE-008",
@@ -518,6 +526,12 @@ class ReportGenerator:
                 if recs_text not in recommendations:
                     recommendations.append(recs_text)
 
+        # 8.5 Model Decision Verification & AI Agent Remediation Planning
+        decision_engine = KevDecisionEngine()
+        verifications = decision_engine.verify_all_clusters(clusters)
+        planner = AgentRemediationPlanner()
+        remediation_plan = planner.generate_plan(domain, clusters, verifications)
+
         summary_stats = {
             "total_pages_crawled": len(pages),
             "total_tests_evaluated": sum(cs.tests_evaluated for cs in category_scores.values()),
@@ -558,4 +572,6 @@ class ReportGenerator:
             competitor_analyses=comp_analyses,
             competitor_analysis=first_comp,
             serp_analyses=serp_analyses or [],
+            remediation_plan=remediation_plan,
+            verifications=verifications,
         )

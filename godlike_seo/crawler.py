@@ -259,17 +259,63 @@ class SEOCrawler:
         title = title_tags[0].get_text(strip=True) if title_tags else ""
         title_count = len(title_tags)
 
-        # Meta description
+        # Meta descriptions
         meta_desc = ""
-        meta_desc_tag = soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
-        if meta_desc_tag:
-            meta_desc = meta_desc_tag.get("content", "").strip()
+        meta_desc_tags = soup.find_all("meta", attrs={"name": re.compile(r"^description$", re.I)})
+        meta_description_count = len(meta_desc_tags)
+        all_meta_descriptions = [(t.get("content") or "").strip() for t in meta_desc_tags]
+        if meta_desc_tags:
+            meta_desc = (meta_desc_tags[0].get("content") or "").strip()
 
-        # Meta robots
+        # Meta robots and structured directives
         meta_robots = ""
         meta_robots_tag = soup.find("meta", attrs={"name": re.compile(r"^robots$", re.I)})
         if meta_robots_tag:
             meta_robots = meta_robots_tag.get("content", "").strip()
+
+        x_robots = headers.get("x-robots-tag", "").strip()
+        combined_robots = f"{meta_robots}, {x_robots}".lower()
+
+        robots_directives: Dict[str, Any] = {
+            "noindex": "noindex" in combined_robots,
+            "nofollow": "nofollow" in combined_robots,
+            "noarchive": "noarchive" in combined_robots,
+            "nosnippet": "nosnippet" in combined_robots,
+            "max_snippet": None,
+            "max_image_preview": None,
+            "max_video_preview": None,
+        }
+
+        ms_match = re.search(r"max-snippet:\s*(-?\d+)", combined_robots)
+        if ms_match:
+            try:
+                robots_directives["max_snippet"] = int(ms_match.group(1))
+            except ValueError:
+                pass
+
+        mip_match = re.search(r"max-image-preview:\s*([a-z]+)", combined_robots)
+        if mip_match:
+            robots_directives["max_image_preview"] = mip_match.group(1)
+
+        mvp_match = re.search(r"max-video-preview:\s*(-?\d+)", combined_robots)
+        if mvp_match:
+            try:
+                robots_directives["max_video_preview"] = int(mvp_match.group(1))
+            except ValueError:
+                pass
+
+        is_snippet_blocked = False
+        snippet_blocking_reason = None
+        if robots_directives["nosnippet"]:
+            is_snippet_blocked = True
+            snippet_blocking_reason = "nosnippet directive present in meta robots or X-Robots-Tag"
+        elif robots_directives["max_snippet"] == 0:
+            is_snippet_blocked = True
+            snippet_blocking_reason = "max-snippet:0 directive completely blocks preview snippets"
+        elif robots_directives["max_snippet"] == -1:
+            snippet_blocking_reason = "Unrestricted snippet length allowed (max-snippet:-1)"
+        elif robots_directives["max_snippet"] is not None and robots_directives["max_snippet"] > 0:
+            snippet_blocking_reason = f"Snippet constrained to maximum {robots_directives['max_snippet']} characters"
 
         # Comprehensive Canonical Directive Extraction & Taxonomy (P0 Fix)
         canonical_tags = soup.find_all("link", attrs={"rel": re.compile(r"^canonical$", re.I)})
@@ -359,44 +405,171 @@ class SEOCrawler:
                 text = h.get_text(strip=True)
                 dom_snippet = str(h)[:150]
                 headings.append(HeadingData(level=level, text=text, dom_snippet=dom_snippet))
+        source_h1_tags = [h.text for h in headings if h.level == 1]
+        rendered_h1_tags = []
+        if rendered_dom:
+            try:
+                r_soup = BeautifulSoup(rendered_dom, "lxml")
+                rendered_h1_tags = [h.get_text(strip=True) for h in r_soup.find_all("h1")]
+            except Exception:
+                rendered_h1_tags = source_h1_tags[:]
+        else:
+            rendered_h1_tags = source_h1_tags[:]
 
-        # Body Text & Metrics
-        for elem in soup(["script", "style", "noscript", "svg"]):
-            elem.decompose()
+        # Structured Data (Extracted BEFORE any DOM modifications)
+        structured_data: List[StructuredDataItem] = []
+        for script in soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}):
+            raw_json = (script.string or script.get_text() or "").strip()
+            # Clean HTML comments or CDATA wrapping
+            if raw_json.startswith("<!--"):
+                raw_json = raw_json[4:]
+            if raw_json.endswith("-->"):
+                raw_json = raw_json[:-3]
+            if raw_json.startswith("<![CDATA["):
+                raw_json = raw_json[9:]
+            if raw_json.endswith("]]>"):
+                raw_json = raw_json[:-3]
+            raw_json = raw_json.strip()
 
-        body_tag = soup.find("body") or soup
-        text_content = body_tag.get_text(separator=" ", strip=True)
-        words = re.findall(r"\b\w+\b", text_content)
-        word_count = len(words)
-        content_hash = hashlib.md5(text_content.encode("utf-8", errors="ignore")).hexdigest()
+            if not raw_json:
+                continue
 
-        # Images
+            try:
+                import json
+                parsed_data = json.loads(raw_json)
+
+                def add_item(d: Dict[str, Any]):
+                    stype = str(d.get("@type", "Thing"))
+                    structured_data.append(StructuredDataItem(
+                        format="json-ld",
+                        type=stype,
+                        data=d,
+                        raw=raw_json[:300],
+                        is_valid=True,
+                    ))
+
+                if isinstance(parsed_data, dict):
+                    if "@graph" in parsed_data and isinstance(parsed_data["@graph"], list):
+                        for g_item in parsed_data["@graph"]:
+                            if isinstance(g_item, dict):
+                                add_item(g_item)
+                    else:
+                        add_item(parsed_data)
+                elif isinstance(parsed_data, list):
+                    for item in parsed_data:
+                        if isinstance(item, dict):
+                            add_item(item)
+            except Exception as jerr:
+                structured_data.append(StructuredDataItem(
+                    format="json-ld",
+                    raw=raw_json[:300],
+                    is_valid=False,
+                    error_message=str(jerr),
+                ))
+
+        # Assets: JS Files (Extracted before DOM decomposition)
+        js_files = [normalize_url(urljoin(final_url, s["src"])) for s in soup.find_all("script", src=True) if s.get("src")]
+
+        # Assets: CSS Files
+        css_files = [normalize_url(urljoin(final_url, link["href"])) for link in soup.find_all("link", rel=re.compile(r"^stylesheet$", re.I)) if link.get("href")]
+
+        # OpenGraph
+        og_dict: Dict[str, str] = {}
+        for og in soup.find_all("meta"):
+            prop = (og.get("property") or og.get("name") or "").lower()
+            cont = og.get("content", "")
+            if prop.startswith("og:") and cont:
+                og_dict[prop] = cont
+
+        open_graph = OpenGraphData(
+            og_title=og_dict.get("og:title"),
+            og_description=og_dict.get("og:description"),
+            og_image=og_dict.get("og:image"),
+            og_url=og_dict.get("og:url"),
+            og_type=og_dict.get("og:type"),
+            og_site_name=og_dict.get("og:site_name"),
+            og_locale=og_dict.get("og:locale"),
+            raw_tags=og_dict,
+        )
+
+        # Twitter Card
+        tw_dict: Dict[str, str] = {}
+        for tw in soup.find_all("meta", attrs={"name": re.compile(r"^twitter:", re.I)}):
+            name = tw.get("name", "").lower()
+            cont = tw.get("content", "")
+            if name and cont:
+                tw_dict[name] = cont
+
+        twitter_card = TwitterCardData(
+            card_type=tw_dict.get("twitter:card"),
+            title=tw_dict.get("twitter:title"),
+            description=tw_dict.get("twitter:description"),
+            image=tw_dict.get("twitter:image"),
+            site=tw_dict.get("twitter:site"),
+            creator=tw_dict.get("twitter:creator"),
+            raw_tags=tw_dict,
+        )
+
+        # Hreflang
+        hreflang_tags: List[HreflangTag] = []
+        for hl in soup.find_all("link", attrs={"rel": re.compile(r"^alternate$", re.I), "hreflang": True}):
+            lang_code = hl.get("hreflang", "").strip()
+            href_val = hl.get("href", "").strip()
+            if lang_code and href_val:
+                hreflang_tags.append(HreflangTag(
+                    language=lang_code,
+                    url=normalize_url(urljoin(final_url, href_val)),
+                ))
+
+        # Images (with decorative / spacer / Next.js intrinsic placeholder detection)
         images: List[ImageData] = []
         for img in soup.find_all("img"):
-            src = img.get("src", "")
-            if src:
-                src = urljoin(final_url, src)
+            src = img.get("src", "").strip()
+            if not src:
+                src = img.get("data-src", "").strip()
+            if not src:
+                continue
+
+            full_src = urljoin(final_url, src)
             alt = img.get("alt")
-            width = None
-            height = None
+            width_val = None
+            height_val = None
             try:
                 if img.get("width"):
-                    width = int(re.sub(r"\D", "", str(img.get("width"))))
+                    width_val = int(re.sub(r"\D", "", str(img.get("width"))))
                 if img.get("height"):
-                    height = int(re.sub(r"\D", "", str(img.get("height"))))
+                    height_val = int(re.sub(r"\D", "", str(img.get("height"))))
             except Exception:
                 pass
 
             loading = img.get("loading", "")
             srcset = img.get("srcset", "")
+            role = (img.get("role") or "").lower()
+            aria_hidden = (img.get("aria-hidden") or "").lower() == "true"
+
+            is_decorative = False
+            src_lower = src.lower()
+            if (
+                src.startswith("data:image/gif;base64,R0lGODlhAQAB")
+                or "spacer.gif" in src_lower
+                or "pixel.gif" in src_lower
+                or "blank.gif" in src_lower
+                or "clear.gif" in src_lower
+                or (width_val == 1 and height_val == 1)
+                or role in ("presentation", "none")
+                or aria_hidden
+            ):
+                is_decorative = True
+
             dom_snippet = str(img)[:150]
             images.append(ImageData(
-                src=src,
+                src=full_src,
                 alt=alt,
-                width=width,
-                height=height,
+                width=width_val,
+                height=height_val,
                 loading=loading,
                 srcset=srcset,
+                is_decorative=is_decorative,
                 dom_snippet=dom_snippet,
             ))
 
@@ -442,84 +615,16 @@ class SEOCrawler:
             else:
                 external_links.append(link_obj)
 
-        # Structured Data
-        structured_data: List[StructuredDataItem] = []
-        for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
-            raw_json = script.string or ""
-            try:
-                import json
-                data = json.loads(raw_json)
-                stype = ""
-                if isinstance(data, dict):
-                    stype = data.get("@type", "")
-                elif isinstance(data, list) and data:
-                    stype = data[0].get("@type", "")
-                structured_data.append(StructuredDataItem(
-                    format="json-ld",
-                    type=str(stype),
-                    data=data if isinstance(data, dict) else {"items": data},
-                    raw=raw_json[:300],
-                    is_valid=True,
-                ))
-            except Exception as jerr:
-                structured_data.append(StructuredDataItem(
-                    format="json-ld",
-                    raw=raw_json[:300],
-                    is_valid=False,
-                    error_message=str(jerr),
-                ))
-
-        # OpenGraph
-        og_dict: Dict[str, str] = {}
-        for og in soup.find_all("meta", property=re.compile(r"^og:", re.I)):
-            prop = og.get("property", "").lower()
-            cont = og.get("content", "")
-            if prop and cont:
-                og_dict[prop] = cont
-
-        open_graph = OpenGraphData(
-            og_title=og_dict.get("og:title"),
-            og_description=og_dict.get("og:description"),
-            og_image=og_dict.get("og:image"),
-            og_url=og_dict.get("og:url"),
-            og_type=og_dict.get("og:type"),
-            og_site_name=og_dict.get("og:site_name"),
-            og_locale=og_dict.get("og:locale"),
-            raw_tags=og_dict,
-        )
-
-        # Twitter Card
-        tw_dict: Dict[str, str] = {}
-        for tw in soup.find_all("meta", attrs={"name": re.compile(r"^twitter:", re.I)}):
-            name = tw.get("name", "").lower()
-            cont = tw.get("content", "")
-            if name and cont:
-                tw_dict[name] = cont
-
-        twitter_card = TwitterCardData(
-            card_type=tw_dict.get("twitter:card"),
-            title=tw_dict.get("twitter:title"),
-            description=tw_dict.get("twitter:description"),
-            image=tw_dict.get("twitter:image"),
-            site=tw_dict.get("twitter:site"),
-            creator=tw_dict.get("twitter:creator"),
-            raw_tags=tw_dict,
-        )
-
-        # Hreflang
-        hreflang_tags: List[HreflangTag] = []
-        for hl in soup.find_all("link", attrs={"rel": "alternate", "hreflang": True}):
-            lang_code = hl.get("hreflang", "").strip()
-            href_val = hl.get("href", "").strip()
-            if lang_code and href_val:
-                hreflang_tags.append(HreflangTag(
-                    language=lang_code,
-                    url=normalize_url(urljoin(final_url, href_val)),
-                ))
-
-        # Assets
-        css_files = [normalize_url(urljoin(final_url, link["href"])) for link in soup.find_all("link", rel="stylesheet") if link.get("href")]
-        js_files = [normalize_url(urljoin(final_url, s["src"])) for s in soup.find_all("script", src=True) if s.get("src")]
+        # Body Text & Metrics (Non-destructive extraction)
+        body_tag = soup.find("body") or soup
+        text_elements = [
+            s.strip() for s in body_tag.find_all(string=True)
+            if s.parent and s.parent.name not in ("script", "style", "noscript", "svg") and s.strip()
+        ]
+        text_content = " ".join(text_elements)
+        words = re.findall(r"\b\w+\b", text_content)
+        word_count = len(words)
+        content_hash = hashlib.md5(text_content.encode("utf-8", errors="ignore")).hexdigest()
 
         # Comprehensive Indexability Determination
         x_robots = headers.get("x-robots-tag", "").strip()
@@ -586,7 +691,12 @@ class SEOCrawler:
             title=title,
             title_count=title_count,
             meta_description=meta_desc,
+            meta_description_count=meta_description_count,
+            all_meta_descriptions=all_meta_descriptions,
             meta_robots=meta_robots,
+            robots_directives=robots_directives,
+            is_snippet_blocked=is_snippet_blocked,
+            snippet_blocking_reason=snippet_blocking_reason,
             canonical_url=canonical_url,
             canonical_raw_snippet=canonical_raw_snippet,
             canonical_state=canonical_state,
@@ -595,6 +705,8 @@ class SEOCrawler:
             has_viewport=has_viewport,
             language=lang,
             headings=headings,
+            source_h1_tags=source_h1_tags,
+            rendered_h1_tags=rendered_h1_tags,
             word_count=word_count,
             text_content=text_content,
             content_hash=content_hash,

@@ -188,7 +188,8 @@ class ExcelReportGenerator:
         headers_pages = [
             "URL", "Status", "Technical Classification", "Content Type", "Is Indexable", "Indexability Reason",
             "Canonical State", "Canonical URL", "Internal Inlinks", "Internal Outlinks", "External Outlinks",
-            "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport", "Images Count"
+            "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport", "Images Count",
+            "Structured Data Count", "OG URL"
         ]
         for c_idx, h in enumerate(headers_pages, start=1):
             cell = ws_pages.cell(row=1, column=c_idx, value=h)
@@ -204,6 +205,8 @@ class ExcelReportGenerator:
                 ex_outlinks = getattr(page, "external_outlinks_count", len(page.external_links))
                 canon_state = getattr(page, "canonical_state", None)
                 canon_state_val = canon_state.value if hasattr(canon_state, "value") else str(canon_state or "missing")
+                schema_cnt = len(getattr(page, "structured_data", []))
+                og_url_val = (page.open_graph.og_url if page.open_graph else "") or (page.og_tags.get("og:url", "") if page.og_tags else "")
 
                 ws_pages.cell(row=r_idx, column=1, value=page.url)
                 ws_pages.cell(row=r_idx, column=2, value=page.status_code)
@@ -223,11 +226,13 @@ class ExcelReportGenerator:
                 ws_pages.cell(row=r_idx, column=16, value=page.meta_description)
                 ws_pages.cell(row=r_idx, column=17, value="Yes" if page.has_viewport else "No")
                 ws_pages.cell(row=r_idx, column=18, value=len(page.images))
+                ws_pages.cell(row=r_idx, column=19, value=schema_cnt)
+                ws_pages.cell(row=r_idx, column=20, value=og_url_val)
 
-                for c in range(1, 19):
+                for c in range(1, 21):
                     ws_pages.cell(row=r_idx, column=c).border = self.border
 
-        self._apply_table_styling(ws_pages, 1, 18)
+        self._apply_table_styling(ws_pages, 1, 20)
 
         # ---------------------------------------------------------------
         # TAB 4: Orphaned Pages
@@ -283,5 +288,47 @@ class ExcelReportGenerator:
                         row_counter += 1
 
         self._apply_table_styling(ws_links, 1, 4)
+
+        # ---------------------------------------------------------------
+        # TAB 6: AI Agent Remediation Tasks
+        # ---------------------------------------------------------------
+        plan = getattr(report, "remediation_plan", None)
+        if plan and getattr(plan, "tasks", None):
+            ws_tasks = wb.create_sheet(title="Agent Remediation Tasks")
+            headers_tasks = [
+                "Task ID", "Priority", "Title", "Target Component", "Affected Pages",
+                "Sample URL", "Problem Statement", "Code Patch Solution", "Playwright Verification Test", "Git Commit Proposal"
+            ]
+            for c_idx, h in enumerate(headers_tasks, start=1):
+                cell = ws_tasks.cell(row=1, column=c_idx, value=h)
+                cell.font = self.header_font
+                cell.fill = self.header_fill
+
+            for r_idx, task in enumerate(plan.tasks, start=2):
+                ws_tasks.cell(row=r_idx, column=1, value=task.task_id)
+                ws_tasks.cell(row=r_idx, column=2, value=task.priority)
+                ws_tasks.cell(row=r_idx, column=3, value=task.title)
+                ws_tasks.cell(row=r_idx, column=4, value=task.target_component)
+                ws_tasks.cell(row=r_idx, column=5, value=task.affected_urls_count)
+                ws_tasks.cell(row=r_idx, column=6, value=task.sample_url)
+                ws_tasks.cell(row=r_idx, column=7, value=task.problem_statement)
+                ws_tasks.cell(row=r_idx, column=8, value=task.code_diff_solution)
+                ws_tasks.cell(row=r_idx, column=9, value=task.playwright_test_code)
+                ws_tasks.cell(row=r_idx, column=10, value=task.git_commit_proposal)
+
+                # Color priority
+                if task.priority == "P0":
+                    ws_tasks.cell(row=r_idx, column=2).fill = self.crit_fill
+                elif task.priority == "P1":
+                    ws_tasks.cell(row=r_idx, column=2).fill = self.high_fill
+                elif task.priority == "P2":
+                    ws_tasks.cell(row=r_idx, column=2).fill = self.med_fill
+                else:
+                    ws_tasks.cell(row=r_idx, column=2).fill = self.low_fill
+
+                for c in range(1, 11):
+                    ws_tasks.cell(row=r_idx, column=c).border = self.border
+
+            self._apply_table_styling(ws_tasks, 1, 10)
 
         wb.save(filepath)

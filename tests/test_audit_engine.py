@@ -26,6 +26,7 @@ from godlike_seo.models import (
     ImageData,
     IssueSeverity,
     IssueCategory,
+    IssueCluster,
     CrawlResult,
 )
 from godlike_seo.analyzers.issue_detector import SEOIssueDetector
@@ -588,6 +589,186 @@ class TestSEOAuditEngine(unittest.TestCase):
         opp_issue = [i for i in content_issues if i.issue_id == "CONTENT_DEPTH_OPPORTUNITY"]
         self.assertEqual(len(opp_issue), 1)
         self.assertEqual(opp_issue[0].severity, IssueSeverity.INFORMATIONAL)
+
+    # Scenario 20: Malformed Open Graph URL (/undefined, /null) -> HIGH
+    def test_scenario_20_malformed_og_url(self):
+        page = PageData(
+            url="https://example.com/",
+            canonical_url="https://example.com/",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            og_tags={"og:url": "https://example.com/undefined", "og:title": "Example"},
+        )
+        issues = self.detector._check_open_graph(page)
+        malformed_issues = [i for i in issues if i.issue_id == "MALFORMED_OG_URL"]
+        self.assertEqual(len(malformed_issues), 1)
+        self.assertEqual(malformed_issues[0].severity, IssueSeverity.HIGH)
+        self.assertIn("undefined", malformed_issues[0].evidence)
+
+    # Scenario 21: Open Graph URL vs Canonical mismatch -> MEDIUM
+    def test_scenario_21_og_url_canonical_mismatch(self):
+        page = PageData(
+            url="https://example.com/blog/seo-guide",
+            canonical_url="https://example.com/blog/seo-guide",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            og_tags={"og:url": "https://example.com/articles/seo-guide", "og:title": "SEO Guide"},
+        )
+        issues = self.detector._check_open_graph(page)
+        mismatch_issues = [i for i in issues if i.issue_id == "OG_URL_CANONICAL_MISMATCH"]
+        self.assertEqual(len(mismatch_issues), 1)
+        self.assertEqual(mismatch_issues[0].severity, IssueSeverity.MEDIUM)
+
+    # Scenario 22: Duplicate / Multiple Meta Descriptions -> MEDIUM
+    def test_scenario_22_multiple_meta_descriptions(self):
+        page = PageData(
+            url="https://example.com/products",
+            meta_description="First meta description tag text.",
+            meta_description_count=2,
+            all_meta_descriptions=["First meta description tag text.", "Second duplicate meta description."],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues = self.detector._check_meta_description(page, {})
+        multi_desc_issues = [i for i in issues if i.issue_id == "MULTIPLE_META_DESCRIPTIONS"]
+        self.assertEqual(len(multi_desc_issues), 1)
+        self.assertEqual(multi_desc_issues[0].severity, IssueSeverity.MEDIUM)
+        self.assertIn("Count: 2", multi_desc_issues[0].evidence)
+
+    # Scenario 23: Robots Snippet Directives (max-snippet:-1 allowed vs nosnippet blocked)
+    def test_scenario_23_snippet_directives(self):
+        # 1. Page with max-snippet:-1 is NOT blocked
+        page_unrestricted = PageData(
+            url="https://example.com/",
+            meta_robots="index, follow, max-snippet:-1, max-image-preview:large",
+            is_snippet_blocked=False,
+            snippet_blocking_reason="Unrestricted snippet length allowed (max-snippet:-1)",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues_ok = self.detector._check_robots_and_snippets(page_unrestricted)
+        self.assertEqual(len(issues_ok), 0)
+
+        # 2. Page with nosnippet IS blocked
+        page_blocked = PageData(
+            url="https://example.com/private",
+            meta_robots="index, follow, nosnippet",
+            is_snippet_blocked=True,
+            snippet_blocking_reason="nosnippet directive present in meta robots or X-Robots-Tag",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues_blocked = self.detector._check_robots_and_snippets(page_blocked)
+        snippet_issues = [i for i in issues_blocked if i.issue_id == "SEARCH_SNIPPET_BLOCKED"]
+        self.assertEqual(len(snippet_issues), 1)
+        self.assertEqual(snippet_issues[0].severity, IssueSeverity.HIGH)
+
+    # Scenario 24: Decorative / 1x1 spacer GIF exclusion from missing-alt
+    def test_scenario_24_decorative_image_alt_exclusion(self):
+        page = PageData(
+            url="https://example.com/gallery",
+            images=[
+                # 1. Real content image missing alt -> should be flagged
+                ImageData(src="https://example.com/hero.jpg", alt=None, width=800, height=600, is_decorative=False),
+                # 2. Next.js 1x1 transparent spacer GIF -> must NOT be flagged
+                ImageData(src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", alt=None, is_decorative=True),
+                # 3. 1x1 tracking pixel -> must NOT be flagged
+                ImageData(src="https://example.com/pixel.gif", alt=None, width=1, height=1, is_decorative=True),
+                # 4. ARIA presentation image -> must NOT be flagged
+                ImageData(src="https://example.com/bg-pattern.svg", alt=None, dom_snippet='<img src="..." role="presentation">', is_decorative=True),
+            ],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        issues = self.detector._check_images(page)
+        alt_issues = [i for i in issues if i.issue_id == "IMAGE_MISSING_ALT"]
+        # Only the 1 real content image should be flagged
+        self.assertEqual(len(alt_issues), 1)
+        self.assertEqual(alt_issues[0].affected_url, "https://example.com/gallery")
+        self.assertIn("hero.jpg", alt_issues[0].evidence)
+
+    # Scenario 25: JSON-LD Structured Data extraction with @graph & multiple items
+    def test_scenario_25_json_ld_graph_extraction(self):
+        from godlike_seo.crawler import SEOCrawler
+        crawler = SEOCrawler()
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Test Page</title>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@graph": [
+                    {"@type": "Organization", "name": "Acme Corp", "url": "https://example.com"},
+                    {"@type": "WebSite", "url": "https://example.com", "name": "Acme Portal"}
+                ]
+            }
+            </script>
+        </head>
+        <body><h1>Hello</h1><p>Test content.</p></body>
+        </html>
+        """
+        page, _ = crawler._extract_page_data(
+            url="https://example.com/",
+            final_url="https://example.com/",
+            status_code=200,
+            headers={"content-type": "text/html"},
+            html=html,
+            response_time_ms=50.0,
+            redirect_chain=[],
+            depth=0,
+        )
+        # Should unpack both Organization and WebSite from @graph
+        self.assertEqual(len(page.structured_data), 2)
+        types = [s.type for s in page.structured_data]
+        self.assertIn("Organization", types)
+        self.assertIn("WebSite", types)
+
+        # Structured data check should report no OPPORTUNITY_SCHEMA_MARKUP
+        issues = self.detector._check_structured_data(page)
+        opp_issues = [i for i in issues if i.issue_id == "OPPORTUNITY_SCHEMA_MARKUP"]
+        self.assertEqual(len(opp_issues), 0)
+
+    # Scenario 26: Kev Decision Engine verification & AI Agent Remediation Plan
+    def test_scenario_26_decision_engine_and_remediation_planner(self):
+        from godlike_seo.decision_engine import KevDecisionEngine, AgentRemediationPlanner
+        cluster = IssueCluster(
+            issue_id="MALFORMED_OG_URL",
+            title="Malformed Open Graph URL Detected",
+            severity=IssueSeverity.HIGH,
+            category=IssueCategory.SOCIAL,
+            description="og:url contains /undefined",
+            observation="Open Graph URL declares https://example.com/undefined",
+            inference="Breaks social sharing previews.",
+            impact="Broken previews.",
+            recommendation="Sanitize og:url.",
+            verification_step="Check tag in head.",
+            confidence="high",
+            occurrences_count=1,
+            affected_urls=["https://example.com/"],
+            sample_evidence=[{"url": "https://example.com/", "evidence": '<meta property="og:url" content="https://example.com/undefined">'}]
+        )
+        engine = KevDecisionEngine()
+        verif = engine.verify_cluster(cluster)
+        self.assertTrue(verif.is_verified)
+        self.assertFalse(verif.is_false_positive)
+        self.assertGreaterEqual(verif.confidence, 0.9)
+        self.assertEqual(verif.remediation_action, "code_patch")
+
+        planner = AgentRemediationPlanner()
+        plan = planner.generate_plan("example.com", [cluster], [verif])
+        self.assertEqual(len(plan.tasks), 1)
+        task = plan.tasks[0]
+        self.assertEqual(task.priority, "P1")
+        self.assertIn("og:url", task.git_commit_proposal)
+        self.assertIn("test_og_url_valid", task.playwright_test_code)
 
 
 if __name__ == "__main__":

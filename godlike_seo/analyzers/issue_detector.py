@@ -102,6 +102,10 @@ class SEOIssueDetector:
         # 1. Sitewide Infrastructure & Directives checks
         issues.extend(self._check_sitewide_noindex(pages))
 
+        # 1.5 Directives & Snippet Previews checks (all pages)
+        for page in pages:
+            issues.extend(self._check_robots_and_snippets(page))
+
         # 2. HTTP & Status checks + Malformed URLs (runs on all crawled URLs)
         for page in pages:
             issues.extend(self._check_http_status(page))
@@ -111,13 +115,14 @@ class SEOIssueDetector:
         for page in html_200_all_pages:
             issues.extend(self._check_mobile_viewport(page))
 
-        # 4. On-Page, Content, Staging, Canonical, Schema, Links (strictly on PUBLIC content)
+        # 4. On-Page, Content, Staging, Canonical, Social, Schema, Links (strictly on PUBLIC content)
         for page in html_200_public_pages:
             issues.extend(self._check_staging_and_test_content(page))
             issues.extend(self._check_title(page, title_map))
             issues.extend(self._check_meta_description(page, desc_map))
             issues.extend(self._check_headings(page, h1_map))
             issues.extend(self._check_canonical(page))
+            issues.extend(self._check_open_graph(page))
             issues.extend(self._check_images(page))
             issues.extend(self._check_content_quality(page, content_hash_map))
             issues.extend(self._check_structured_data(page))
@@ -332,6 +337,31 @@ class SEOIssueDetector:
                 confidence=IssueConfidence.HIGH,
             ))
 
+        return issues
+
+    # ------------------------------------------------------------------
+    # 0.5 Robots Directives & Snippet Previews
+    # ------------------------------------------------------------------
+
+    def _check_robots_and_snippets(self, page: PageData) -> List[SEOIssue]:
+        issues = []
+        if getattr(page, "is_snippet_blocked", False):
+            reason = getattr(page, "snippet_blocking_reason", "nosnippet / max-snippet:0")
+            issues.append(SEOIssue(
+                issue_id="SEARCH_SNIPPET_BLOCKED",
+                severity=IssueSeverity.HIGH,
+                category=IssueCategory.TECHNICAL,
+                title="Search Snippet Previews Blocked by Robots Directive",
+                description=f"Robots directive blocks search engines from displaying preview snippets: {reason}",
+                affected_url=page.url,
+                evidence=f"Directive: {reason} | Meta robots: '{page.meta_robots}' | X-Robots-Tag: '{page.x_robots_tag}'",
+                observation=f"Page serves a snippet-blocking directive ({reason}).",
+                inference="Google, Bing, and other search engines will omit descriptive text snippets and video previews in search results, showing only a bare link. This drastically lowers search visibility and organic click-through rate (CTR).",
+                impact="Severe CTR reduction in organic search results due to blank or missing snippet descriptions.",
+                recommendation="Remove 'nosnippet' or change 'max-snippet:0' to 'max-snippet:-1' (or omit the directive) unless snippet restriction is legally required.",
+                verification_step="Verify meta robots tag does not include nosnippet or max-snippet:0.",
+                confidence=IssueConfidence.HIGH,
+            ))
         return issues
 
     # ------------------------------------------------------------------
@@ -649,6 +679,27 @@ class SEOIssueDetector:
                 confidence=IssueConfidence.HIGH,
             ))
 
+        # Check for multiple/duplicate meta description tags
+        desc_count = getattr(page, "meta_description_count", 1)
+        if desc_count > 1:
+            all_descs = getattr(page, "all_meta_descriptions", [])
+            samples_str = "; ".join([f'"{d[:60]}..."' for d in all_descs[:2]])
+            issues.append(SEOIssue(
+                issue_id="MULTIPLE_META_DESCRIPTIONS",
+                severity=IssueSeverity.MEDIUM,
+                category=IssueCategory.ON_PAGE,
+                title=f"Multiple Meta Description Tags Declared ({desc_count} tags)",
+                description=f"Page declares {desc_count} separate <meta name='description'> tags in HTML head.",
+                affected_url=page.url,
+                evidence=f"Count: {desc_count} tags | Samples: {samples_str}",
+                observation=f"Page HTML contains {desc_count} distinct <meta name='description'> tags in the document <head>.",
+                inference="Search engines expect at most one meta description per page. Serving duplicate description tags causes search engines to arbitrarily choose one or ignore both, risking erratic SERP snippet generation.",
+                impact="Search engines may display unpredictable snippets or penalize snippet quality.",
+                recommendation="Remove redundant <meta name='description'> tags so exactly one unique, descriptive tag remains.",
+                verification_step="Inspect page source and verify only one <meta name='description'> is present in <head>.",
+                confidence=IssueConfidence.HIGH,
+            ))
+
         return issues
 
     # ------------------------------------------------------------------
@@ -752,48 +803,140 @@ class SEOIssueDetector:
         return issues
 
     # ------------------------------------------------------------------
-    # 7. Images (CLS & Alt Text)
+    # 6.5 Open Graph & Social Metadata Validation
+    # ------------------------------------------------------------------
+
+    def _check_open_graph(self, page: PageData) -> List[SEOIssue]:
+        issues = []
+        og = page.open_graph
+        og_tags = page.og_tags or {}
+
+        og_url = ((og.og_url if og else None) or og_tags.get("og:url", "") or "").strip()
+        if og_url:
+            og_url_lower = og_url.lower()
+            malformed_tokens = ["/undefined", "/null", "nan", "[object", "{{", "{url}", "undefined/"]
+            found_token = next((tok for tok in malformed_tokens if tok in og_url_lower), None)
+            if found_token:
+                issues.append(SEOIssue(
+                    issue_id="MALFORMED_OG_URL",
+                    severity=IssueSeverity.HIGH,
+                    category=IssueCategory.SOCIAL,
+                    title="Malformed Open Graph URL Detected",
+                    description=f"Open Graph URL tag contains invalid placeholder or JavaScript token '{found_token}': {og_url}",
+                    affected_url=page.url,
+                    evidence=f'<meta property="og:url" content="{og_url}">',
+                    observation=f"Open Graph URL declares '{og_url}', which contains an unrendered JavaScript or template variable ('{found_token}').",
+                    inference="When this page is shared on social platforms (LinkedIn, Facebook, Slack, Twitter/X) or crawled by social bots, links will resolve to a 404 or invalid route. Social graphs will also fail to consolidate engagement metrics to the primary canonical URL.",
+                    impact="Breaks social sharing previews and prevents social platforms from linking to the correct canonical URL.",
+                    recommendation="Fix the Open Graph template or frontend build to inject the actual page canonical URL instead of undefined/null.",
+                    verification_step="Verify <meta property=\"og:url\"> contains a valid, absolute 200 OK canonical URL.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+            elif page.canonical_url:
+                norm_og = normalize_url(og_url)
+                norm_canon = normalize_url(page.canonical_url)
+                if not are_urls_equivalent(norm_og, norm_canon):
+                    issues.append(SEOIssue(
+                        issue_id="OG_URL_CANONICAL_MISMATCH",
+                        severity=IssueSeverity.MEDIUM,
+                        category=IssueCategory.SOCIAL,
+                        title="Open Graph URL Does Not Match Canonical URL",
+                        description=f"og:url ('{og_url}') diverges from canonical link ('{page.canonical_url}').",
+                        affected_url=page.url,
+                        evidence=f'og:url="{og_url}" vs canonical="{page.canonical_url}"',
+                        observation=f"Declared Open Graph URL ('{og_url}') differs from the page's canonical URL directive ('{page.canonical_url}').",
+                        inference="According to Open Graph Protocol and search engine best practices, og:url should match the canonical URL so that social shares, backlinks, and search signals aggregate to the single authoritative URL.",
+                        impact="Splits engagement signals and may cause social platforms to crawl and cache the wrong page variant.",
+                        recommendation="Align <meta property=\"og:url\"> with the page's <link rel=\"canonical\"> URL.",
+                        verification_step="Confirm og:url and canonical URL match exactly.",
+                        confidence=IssueConfidence.HIGH,
+                    ))
+
+        if not og or not og.og_title:
+            if not og_tags.get("og:title"):
+                issues.append(SEOIssue(
+                    issue_id="MISSING_OG_TITLE",
+                    severity=IssueSeverity.INFORMATIONAL,
+                    category=IssueCategory.SOCIAL,
+                    title="Missing Open Graph Title Tag",
+                    description="Page lacks an og:title meta tag for social media sharing.",
+                    affected_url=page.url,
+                    evidence="<meta property=\"og:title\"> not found in head.",
+                    observation="Page head does not define an og:title tag.",
+                    inference="Social platforms will fallback to the HTML <title> tag, which may be styled differently or lack social-optimized copy.",
+                    impact="Informational; limits custom social snippet optimization.",
+                    recommendation="Add <meta property=\"og:title\" content=\"...\"> tailored for social audiences.",
+                    verification_step="Inspect page head for og:title tag.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+        return issues
+
+    # ------------------------------------------------------------------
+    # 7. Images (CLS & Alt Text, with Spacer & Decorative Filtering)
     # ------------------------------------------------------------------
 
     def _check_images(self, page: PageData) -> List[SEOIssue]:
         issues = []
+        seen_missing_alt_srcs = set()
+        seen_missing_dim_srcs = set()
+
         for img in page.images:
-            src = img.src or ""
+            src = (img.src or "").strip()
+            src_lower = src.lower()
+
+            # Skip decorative images, transparent 1x1 GIFs, tracking pixels, Next.js placeholders
+            if (
+                getattr(img, "is_decorative", False)
+                or src.startswith("data:image/gif;base64,R0lGODlhAQAB")
+                or "spacer.gif" in src_lower
+                or "pixel.gif" in src_lower
+                or "blank.gif" in src_lower
+                or "clear.gif" in src_lower
+                or (img.width == 1 and img.height == 1)
+                or "role=\"presentation\"" in (img.dom_snippet or "").lower()
+                or "aria-hidden=\"true\"" in (img.dom_snippet or "").lower()
+            ):
+                continue
+
             # Missing alt attribute
             if img.alt is None:
-                issues.append(SEOIssue(
-                    issue_id="IMAGE_MISSING_ALT",
-                    severity=IssueSeverity.LOW,
-                    category=IssueCategory.ON_PAGE,
-                    title="Image Missing Alt Attribute",
-                    description=f"Image {src[:60]} does not have an alt attribute.",
-                    affected_url=page.url,
-                    evidence=img.dom_snippet or f'<img src="{src}">',
-                    observation=f"Image element has no alt attribute defined.",
-                    inference="Assistive screen readers cannot announce image content; Google Images indexing is hindered.",
-                    impact="Harms image accessibility (WCAG 2.1) and prevents Google Image search indexing.",
-                    recommendation="Add a descriptive alt attribute, or alt=\"\" if purely decorative.",
-                    verification_step="Inspect <img> tag in DOM.",
-                    confidence=IssueConfidence.HIGH,
-                ))
+                if src not in seen_missing_alt_srcs:
+                    seen_missing_alt_srcs.add(src)
+                    issues.append(SEOIssue(
+                        issue_id="IMAGE_MISSING_ALT",
+                        severity=IssueSeverity.LOW,
+                        category=IssueCategory.ON_PAGE,
+                        title="Image Missing Alt Attribute",
+                        description=f"Image {src[:60]} does not have an alt attribute.",
+                        affected_url=page.url,
+                        evidence=img.dom_snippet or f'<img src="{src}">',
+                        observation=f"Image element has no alt attribute defined.",
+                        inference="Assistive screen readers cannot announce image content; Google Images indexing is hindered.",
+                        impact="Harms image accessibility (WCAG 2.1) and prevents Google Image search indexing.",
+                        recommendation="Add a descriptive alt attribute, or alt=\"\" if purely decorative.",
+                        verification_step="Inspect <img> tag in DOM.",
+                        confidence=IssueConfidence.HIGH,
+                    ))
 
             # Missing width/height (CLS Risk)
             if not img.width or not img.height:
-                issues.append(SEOIssue(
-                    issue_id="IMAGE_MISSING_DIMENSIONS",
-                    severity=IssueSeverity.LOW,
-                    category=IssueCategory.PERFORMANCE,
-                    title="Image Missing Explicit Width/Height Attributes",
-                    description=f"Image {src[:60]} lacks explicit width and height dimensions.",
-                    affected_url=page.url,
-                    evidence=img.dom_snippet or f'<img src="{src}">',
-                    observation=f"Image tag ('{src[:40]}') lacks explicit width and height HTML attributes.",
-                    inference="Browser cannot allocate layout space prior to download, creating Cumulative Layout Shift (CLS) risk if not constrained via CSS aspect-ratio.",
-                    impact="May trigger layout shifts during page loading, negatively affecting Core Web Vitals (CLS).",
-                    recommendation="Add explicit width and height attributes (or CSS aspect-ratio) to reserve layout space.",
-                    verification_step="Verify width and height attributes exist on <img> or CSS aspect-ratio is defined.",
-                    confidence=IssueConfidence.HIGH,
-                ))
+                if not src.startswith("data:image/") and src not in seen_missing_dim_srcs:
+                    seen_missing_dim_srcs.add(src)
+                    issues.append(SEOIssue(
+                        issue_id="IMAGE_MISSING_DIMENSIONS",
+                        severity=IssueSeverity.LOW,
+                        category=IssueCategory.PERFORMANCE,
+                        title="Image Missing Explicit Width/Height Attributes",
+                        description=f"Image {src[:60]} lacks explicit width and height dimensions.",
+                        affected_url=page.url,
+                        evidence=img.dom_snippet or f'<img src="{src}">',
+                        observation=f"Image tag ('{src[:40]}') lacks explicit width and height HTML attributes.",
+                        inference="Browser cannot allocate layout space prior to download, creating Cumulative Layout Shift (CLS) risk if not constrained via CSS aspect-ratio.",
+                        impact="May trigger layout shifts during page loading, negatively affecting Core Web Vitals (CLS).",
+                        recommendation="Add explicit width and height attributes (or CSS aspect-ratio) to reserve layout space.",
+                        verification_step="Verify width and height attributes exist on <img> or CSS aspect-ratio is defined.",
+                        confidence=IssueConfidence.HIGH,
+                    ))
         return issues
 
     # ------------------------------------------------------------------

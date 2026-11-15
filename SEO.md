@@ -1,13 +1,13 @@
 ---
 name: seo-toolkit
-description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, and multi-format reporting (Markdown, Excel, HTML, JSON).
+description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, Kev-4B secondary decision verification, and multi-format reporting (Markdown, Excel, HTML, JSON).
 argument-hint: "[crawl|serp|keywords|test-login] [options]"
-version: 3.1.0
+version: 3.2.0
 ---
 
-# ⚡ Godlike SEO Engine 3.1: Agent Skills & Capability Guide
+# ⚡ Godlike SEO Engine 3.2: Agent Skills & Capability Guide
 
-The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
+The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, Kev-4B decision verification layer, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
 
 ---
 
@@ -298,17 +298,21 @@ The generated `.md` report is optimized for LLMs. Agents should follow this pars
 
 ## 📋 Agent Action Checklist for Common Issues
 
-When an agent is tasked with fixing issues detected by Godlike SEO 3.0, follow this standard procedure:
+When an agent is tasked with fixing issues detected by Godlike SEO 3.2, consult the generated `remediation_plan` in the audit JSON or follow this standard procedure:
 
-| Detected Issue ID | Agent Remediation Workflow |
-| :--- | :--- |
-| `HTTP_404_INTERNAL_LINKED` | Grep codebase for the broken URL string across templates/components (`href="/broken"`). Replace with active route or implement a 301 redirect in web server config (`nginx.conf` or framework routes). |
-| `DUPLICATE_TITLE_TAG` | Open page templates/metadata configs. Ensure dynamic or distinct `<title>` strings reflecting the specific page content (e.g. append `Category Name \| Brand`). |
-| `IMAGE_MISSING_DIMENSIONS` | Inspect template `<img>` tags. Add explicit `width` and `height` attributes matching natural image aspect ratio, or apply CSS `aspect-ratio: auto;` to prevent layout shifts (CLS). |
-| `MISSING_CANONICAL_WITH_QUERY` | In page `<head>`, dynamically render `<link rel="canonical" href="<clean_base_url>">` stripping query parameters. |
-| `KEYWORD_CANNIBALIZATION_RISK` | Audit search intent of the competing URLs. If they serve different intents, differentiate the primary H1 and Title keywords. If intents are identical, consolidate content to the strongest URL. |
-| `OPPORTUNITY_SCHEMA_MARKUP` | Generate JSON-LD script block (`<script type="application/ld+json">`) with appropriate Schema.org type (`Organization`, `Product`, `Article`, `FAQPage`) and insert into `<head>`. |
-| `ORPHANED_PAGE_DETECTED` | Add an internal anchor link from a relevant category hub, parent section, or blog post so search bots can traverse to this public page naturally. |
+| Detected Issue ID | Severity | Agent Remediation Workflow |
+| :--- | :---: | :--- |
+| `MALFORMED_OG_URL` | **HIGH** | Open document `<head>` or SEO layout component (`app/layout.tsx`, `pages/_app.tsx`). Replace unrendered `${slug}` or placeholder template variables with a validated absolute canonical URL fallback. |
+| `MULTIPLE_META_DESCRIPTIONS` | **MEDIUM** | Inspect document `<head>` and sub-view components. Ensure `<meta name="description">` is rendered at most once (e.g. use `key="description"` in Next.js `<Head>` to prevent duplication). |
+| `SEARCH_SNIPPET_BLOCKED` | **HIGH** | Remove `nosnippet` or change `max-snippet:0` to `max-snippet:-1` in `<meta name="robots">` or `X-Robots-Tag` header unless restriction is required for legal compliance. |
+| `OG_URL_CANONICAL_MISMATCH` | **MEDIUM** | Align `<meta property="og:url">` with the page's declared `<link rel="canonical">` href to consolidate social signals and link graph authority. |
+| `HTTP_404_INTERNAL_LINKED` | **HIGH** | Grep codebase for the broken URL string across templates/components (`href="/broken"`). Replace with active route or implement a 301 redirect in web server config (`nginx.conf` or framework routes). |
+| `DUPLICATE_TITLE_TAG` | **HIGH** | Open page templates/metadata configs. Ensure dynamic or distinct `<title>` strings reflecting the specific page content (e.g. append `Category Name \| Brand`). |
+| `IMAGE_MISSING_DIMENSIONS` | **LOW** | Inspect template `<img>` tags. Add explicit `width` and `height` attributes matching natural image aspect ratio, or apply CSS `aspect-ratio: auto;` to prevent layout shifts (CLS). |
+| `MISSING_CANONICAL_WITH_QUERY` | **MEDIUM** | In page `<head>`, dynamically render `<link rel="canonical" href="<clean_base_url>">` stripping query parameters. |
+| `KEYWORD_CANNIBALIZATION_RISK` | **MEDIUM** | Audit search intent of the competing URLs. If they serve different intents, differentiate the primary H1 and Title keywords. If intents are identical, consolidate content to the strongest URL. |
+| `OPPORTUNITY_SCHEMA_MARKUP` | **INFO** | Generate JSON-LD script block (`<script type="application/ld+json">`) with appropriate Schema.org type (`Organization`, `Product`, `Article`, `FAQPage`) and insert into `<head>`. |
+| `ORPHANED_PAGE_DETECTED` | **HIGH** | Add an internal anchor link from a relevant category hub, parent section, or blog post so search bots can traverse to this public page naturally. |
 
 ---
 

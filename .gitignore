@@ -38,6 +38,7 @@ models--*/
 /*.xlsx
 /*.html
 /*.json
+*.pdf
 !skills/**/*.json
 
 # OS & IDE Metadata

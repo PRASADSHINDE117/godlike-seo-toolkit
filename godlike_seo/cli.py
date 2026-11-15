@@ -231,6 +231,8 @@ def crawl(
             "issue_clusters": [c.to_dict() for c in report.issue_clusters],
             "recommendations": report.recommendations,
             "orphaned_pages": crawl_result.orphaned_pages,
+            "remediation_plan": report.remediation_plan.to_dict() if getattr(report, "remediation_plan", None) else None,
+            "verifications": [v.to_dict() for v in getattr(report, "verifications", [])],
         }
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_payload, f, indent=2)

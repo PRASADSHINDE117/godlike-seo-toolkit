@@ -163,4 +163,21 @@ class MarkdownReportGenerator:
                         lines.append(f"- {g}")
             lines.append("")
 
+        # 8. AI Agent Remediation Plan & Automated Verification
+        plan = getattr(report, "remediation_plan", None)
+        if plan and getattr(plan, "tasks", None):
+            lines.append("## 🤖 AI Agent Remediation Tasks (Playwright Verified & Patched)")
+            lines.append(f"> {plan.agent_remediation_summary}\n")
+            for t in plan.tasks:
+                lines.append(f"### `{t.task_id}` [{t.priority}]: {t.title}")
+                lines.append(f"- **Target Component:** `{t.target_component}`")
+                lines.append(f"- **Sample URL:** `{t.sample_url}` (Affects {t.affected_urls_count} page{'s' if t.affected_urls_count != 1 else ''})")
+                lines.append(f"- **Observed Condition:** {t.problem_statement}")
+                lines.append(f"- **Git Commit Proposal:** `{t.git_commit_proposal}`\n")
+                lines.append("**Suggested Code Patch:**")
+                lines.append(t.code_diff_solution)
+                lines.append("\n**Playwright Verification Script:**")
+                lines.append(t.playwright_test_code)
+                lines.append("")
+
         return "\n".join(lines)
