@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from godlike_seo.models import (
+    CanonicalState,
     IssueCategory,
     IssueCluster,
     IssueConfidence,
@@ -116,12 +117,13 @@ class SEOIssueDetector:
             issues.extend(self._check_mobile_viewport(page))
 
         # 4. On-Page, Content, Staging, Canonical, Social, Schema, Links (strictly on PUBLIC content)
+        pages_by_url = {normalize_url(p.final_url or p.url): p for p in pages}
         for page in html_200_public_pages:
             issues.extend(self._check_staging_and_test_content(page))
             issues.extend(self._check_title(page, title_map))
             issues.extend(self._check_meta_description(page, desc_map))
             issues.extend(self._check_headings(page, h1_map))
-            issues.extend(self._check_canonical(page))
+            issues.extend(self._check_canonical(page, pages_by_url))
             issues.extend(self._check_open_graph(page))
             issues.extend(self._check_images(page))
             issues.extend(self._check_content_quality(page, content_hash_map))
@@ -218,7 +220,7 @@ class SEOIssueDetector:
         if not pages:
             return issues
 
-        # Context-aware denominator: Evaluate over public HTML pages
+        # Context-aware denominator: Evaluate strictly over verified public HTML pages
         public_pages = [
             p for p in pages
             if p.status_code == 200
@@ -226,9 +228,11 @@ class SEOIssueDetector:
             and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT
             and not getattr(p, "is_auth_gate", False)
         ]
-        target_pages = public_pages if len(public_pages) >= 2 else [p for p in pages if p.status_code == 200 and p.has_html]
-        if not target_pages:
+        if len(public_pages) < 2:
+            # Cannot infer a domain-wide indexation block with fewer than 2 public content pages
             return issues
+
+        target_pages = public_pages
 
         noindex_pages: List[Tuple[PageData, str]] = []
         for p in target_pages:
@@ -763,8 +767,28 @@ class SEOIssueDetector:
     # 6. Canonical Validation
     # ------------------------------------------------------------------
 
-    def _check_canonical(self, page: PageData) -> List[SEOIssue]:
+    def _check_canonical(self, page: PageData, pages_by_url: Optional[Dict[str, PageData]] = None) -> List[SEOIssue]:
         issues = []
+        pages_by_url = pages_by_url or {}
+
+        # 1. Multiple Conflicting Canonicals
+        if getattr(page, "canonical_state", None) == CanonicalState.MULTIPLE:
+            issues.append(SEOIssue(
+                issue_id="CONFLICTING_CANONICAL_TAGS",
+                severity=IssueSeverity.HIGH,
+                category=IssueCategory.TECHNICAL,
+                title="Multiple Conflicting Canonical Tags Declared",
+                description="HTML document declares more than one <link rel='canonical'> directive.",
+                affected_url=page.url,
+                evidence=page.canonical_raw_snippet or "Multiple canonical tags found in DOM",
+                observation="Document <head> contains multiple conflicting canonical link tags.",
+                inference="When multiple canonical directives are present, Google ignores all of them, reverting to heuristic canonicalization.",
+                impact="Search engines ignore all declared canonicals, potentially choosing an arbitrary URL to index.",
+                recommendation="Remove extraneous canonical tags so only exactly one authoritative <link rel='canonical'> is present.",
+                verification_step="Inspect HTML head and confirm only 1 canonical link element exists.",
+                confidence=IssueConfidence.HIGH,
+            ))
+
         if not page.canonical_url:
             has_query = bool(urlparse(page.url).query)
             if has_query:
@@ -802,6 +826,7 @@ class SEOIssueDetector:
         else:
             # Check if canonical is an invalid URL or points to a 4xx
             canon = page.canonical_url
+            norm_canon = normalize_url(canon)
             if not canon.startswith(("http://", "https://")):
                 issues.append(SEOIssue(
                     issue_id="RELATIVE_CANONICAL_URL",
@@ -818,6 +843,26 @@ class SEOIssueDetector:
                     verification_step="Confirm canonical starts with https://.",
                     confidence=IssueConfidence.HIGH,
                 ))
+
+            # Target canonical points to 4xx client error
+            if norm_canon in pages_by_url:
+                target_page = pages_by_url[norm_canon]
+                if target_page.status_code >= 400:
+                    issues.append(SEOIssue(
+                        issue_id="CANONICAL_POINTS_TO_4XX",
+                        severity=IssueSeverity.HIGH,
+                        category=IssueCategory.TECHNICAL,
+                        title="Canonical URL Points to 4xx Client Error",
+                        description=f"Page specifies canonical target '{canon}' which returns HTTP {target_page.status_code}.",
+                        affected_url=page.url,
+                        evidence=f"Canonical href='{canon}' resolved to HTTP {target_page.status_code}",
+                        observation=f"Canonical URL directive points to an error page (HTTP {target_page.status_code}).",
+                        inference="Search engines cannot index or consolidate ranking signals to a broken canonical destination.",
+                        impact="Critical indexing breakdown: canonical target returns an error status code.",
+                        recommendation="Update the canonical URL to point to a valid, live 200 OK page, or remove the canonical directive.",
+                        verification_step="Verify canonical href target returns HTTP 200 OK.",
+                        confidence=IssueConfidence.HIGH,
+                    ))
         return issues
 
     # ------------------------------------------------------------------

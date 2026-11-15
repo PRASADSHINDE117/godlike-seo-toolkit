@@ -1,6 +1,6 @@
 """
-Godlike SEO Engine 3.3
-======================
+Godlike SEO Engine 3.3.1
+=======================
 
 An evidence-backed, production-grade Python SEO diagnostic suite featuring
 deterministic URL normalization, root-cause issue clustering, transparent

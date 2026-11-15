@@ -108,20 +108,31 @@ class RemediationPlan:
 class KevDecisionEngine:
     """
     Evaluates SEO issue clusters using typed questions over structured audit states.
-    Supports live Kev-4B HTTP endpoints (`POST /v1/systemone`) and provides a
-    resilient, deterministic offline verification engine when offline.
+    Supports live Kev-4B HTTP endpoints (`POST /v1/systemone`) when enabled, and provides a
+    resilient, deterministic offline verification engine for fast, zero-network verification.
     """
 
     def __init__(
         self,
-        endpoint_url: str = "http://127.0.0.1:8008/v1/systemone",
-        timeout_seconds: float = 3.0,
+        endpoint_url: Optional[str] = None,
+        timeout_seconds: float = 1.0,
+        enabled: Optional[bool] = None,
     ) -> None:
-        self.endpoint_url = endpoint_url
+        import os
+        if enabled is None:
+            self.enabled = os.environ.get("ENABLE_KEV_4B", "").lower() in ("1", "true", "yes")
+        else:
+            self.enabled = enabled
+
+        self.endpoint_url = endpoint_url or os.environ.get("KEV_4B_ENDPOINT", "http://127.0.0.1:8008/v1/systemone")
         self.timeout_seconds = timeout_seconds
+        self._endpoint_available: Optional[bool] = None
 
     def _query_live_kev(self, state_text: str, questions: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Query live Kev-4B System One endpoint if available."""
+        """Query live Kev-4B System One endpoint if enabled and reachable."""
+        if not self.enabled or self._endpoint_available is False:
+            return None
+
         payload = {
             "state": state_text,
             "questions": questions,
@@ -136,9 +147,11 @@ class KevDecisionEngine:
             )
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
                 if resp.status == 200:
+                    self._endpoint_available = True
                     return json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logger.debug("Live Kev-4B endpoint unavailable (%s): %s", self.endpoint_url, e)
+            self._endpoint_available = False
         return None
 
     def verify_cluster(
@@ -163,49 +176,50 @@ class KevDecisionEngine:
         }
         state_text = json.dumps(state_dict, indent=2)
 
-        # 1. Attempt Live Kev-4B Query
-        questions = {
-            "is_false_positive": {
-                "type": "choice",
-                "instructions": "Is this audit finding a false positive or harmless framework artifact?",
-                "criteria": {
-                    "false_positive": "Harmless artifact, tracking pixel, or intended application behavior",
-                    "genuine_defect": "Real technical SEO issue, broken route, or template bug",
+        # 1. Attempt Live Kev-4B Query only if enabled
+        if self.enabled and self._endpoint_available is not False:
+            questions = {
+                "is_false_positive": {
+                    "type": "choice",
+                    "instructions": "Is this audit finding a false positive or harmless framework artifact?",
+                    "criteria": {
+                        "false_positive": "Harmless artifact, tracking pixel, or intended application behavior",
+                        "genuine_defect": "Real technical SEO issue, broken route, or template bug",
+                    },
                 },
-            },
-            "remediation_action": {
-                "type": "choice",
-                "instructions": "What technical action is required to resolve this finding?",
-                "criteria": {
-                    "code_patch": "Edit frontend layout, template, or routing component",
-                    "server_config": "Update HTTP headers, web server rules, or redirects",
-                    "content_update": "Edit copywriting, metadata, or heading hierarchy",
-                    "no_action": "Do nothing (valid condition)",
+                "remediation_action": {
+                    "type": "choice",
+                    "instructions": "What technical action is required to resolve this finding?",
+                    "criteria": {
+                        "code_patch": "Edit frontend layout, template, or routing component",
+                        "server_config": "Update HTTP headers, web server rules, or redirects",
+                        "content_update": "Edit copywriting, metadata, or heading hierarchy",
+                        "no_action": "Do nothing (valid condition)",
+                    },
                 },
-            },
-        }
+            }
 
-        live_res = self._query_live_kev(state_text, questions)
-        if live_res and "choices" in live_res:
-            try:
-                fp_choice = live_res["choices"]["is_false_positive"]["choice"]
-                fp_conf = float(live_res["choices"]["is_false_positive"].get("confidence", 0.9))
-                act_choice = live_res["choices"]["remediation_action"]["choice"]
+            live_res = self._query_live_kev(state_text, questions)
+            if live_res and "choices" in live_res:
+                try:
+                    fp_choice = live_res["choices"]["is_false_positive"]["choice"]
+                    fp_conf = float(live_res["choices"]["is_false_positive"].get("confidence", 0.9))
+                    act_choice = live_res["choices"]["remediation_action"]["choice"]
 
-                is_fp = (fp_choice == "false_positive")
-                return DecisionVerification(
-                    issue_id=cluster.issue_id,
-                    is_verified=not is_fp,
-                    is_false_positive=is_fp,
-                    confidence=fp_conf,
-                    root_cause_type="model_classified",
-                    remediation_action=act_choice,
-                    agent_automation_feasibility="fully_automated" if act_choice == "code_patch" else "supervised_review",
-                    verification_source="kev_4b_live",
-                    rationale=f"Kev-4B evaluated state with {fp_conf:.1%} confidence as {fp_choice}.",
-                )
-            except Exception as parse_err:
-                logger.debug("Failed parsing live Kev-4B response: %s", parse_err)
+                    is_fp = (fp_choice == "false_positive")
+                    return DecisionVerification(
+                        issue_id=cluster.issue_id,
+                        is_verified=not is_fp,
+                        is_false_positive=is_fp,
+                        confidence=fp_conf,
+                        root_cause_type="model_classified",
+                        remediation_action=act_choice,
+                        agent_automation_feasibility="fully_automated" if act_choice == "code_patch" else "supervised_review",
+                        verification_source="kev_4b_live",
+                        rationale=f"Kev-4B evaluated state with {fp_conf:.1%} confidence as {fp_choice}.",
+                    )
+                except Exception as parse_err:
+                    logger.debug("Failed parsing live Kev-4B response: %s", parse_err)
 
         # 2. Resilient Deterministic Offline Verification Engine
         return self._offline_verify_cluster(cluster)

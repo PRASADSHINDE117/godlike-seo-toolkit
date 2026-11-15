@@ -939,6 +939,8 @@ class SEOCrawler:
             start_url=self._root_url,
             domain=self._target_domain,
             environment=self.config.environment,
+            sitemaps_attempted=self.config.parse_sitemap,
+            robots_attempted=self.config.respect_robots_txt,
             started_at=datetime.now(timezone.utc).isoformat(),
         )
 

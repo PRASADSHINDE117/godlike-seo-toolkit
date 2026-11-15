@@ -771,8 +771,10 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertIn("og:url", task.git_commit_proposal)
         self.assertIn("test_og_url_valid", task.playwright_test_code)
 
-    # Scenario 27: Calibrated Scoring Architecture & Release Gating (HIGH defect gates release)
+    # Scenario 27: Calibrated Scoring Architecture & Release Gating (Scope-Aware Gating)
     def test_scenario_27_calibrated_scoring_and_release_gating(self):
+        # Part A: Isolated social tag defect (MALFORMED_OG_URL) applies category deduction
+        # without halting releases or falsely capping an otherwise healthy site.
         page = PageData(
             url="https://example.com/",
             canonical_url="https://example.com/",
@@ -796,16 +798,36 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertEqual(len(social_cs.deductions), 1)
         self.assertEqual(social_cs.deductions[0].points_deducted, 8.0)
 
-        # 2. Audit Status MUST NOT be green PASS when a HIGH defect exists
-        self.assertEqual(report.audit_status, "NEEDS_REVIEW")
-        self.assertIn("HIGH SEVERITY ISSUES", report.status_message)
-
-        # 3. Overall score must be capped below 85.0
-        self.assertLessEqual(report.overall_score, 84.9)
-
-        # 4. Deduction must be recorded in itemized all_deductions list
+        # 2. Deduction must be recorded in itemized all_deductions list
         malformed_deductions = [d for d in report.all_deductions if "Open Graph" in d.rule_title or "og:url" in d.reason.lower()]
         self.assertEqual(len(malformed_deductions), 1)
+
+        # 3. Isolated social advisory does NOT halt release: site passes with mathematical score reduction (~98.8)
+        self.assertEqual(report.audit_status, "PASS")
+        self.assertGreaterEqual(report.overall_score, 95.0)
+
+        # Part B: Systemic indexation/integrity defect (CANONICAL_POINTS_TO_4XX) GATES release
+        page_broken_canonical = PageData(
+            url="https://example.com/broken-canonical",
+            canonical_url="https://example.com/missing-404-target",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Valid Title For Testing Scoring Engine",
+            word_count=400,
+            has_viewport=True,
+        )
+        page_404_target = PageData(
+            url="https://example.com/missing-404-target",
+            status_code=404,
+            has_html=False,
+            page_type=PageType.PUBLIC_CONTENT,
+        )
+        crawl_gated = CrawlResult(start_url="https://example.com/", pages=[page_broken_canonical, page_404_target])
+        report_gated = self.report_gen.generate_report(crawl_gated)
+        self.assertEqual(report_gated.audit_status, "NEEDS_REVIEW")
+        self.assertIn("SYSTEMIC DEFECTS", report_gated.status_message)
+        self.assertLessEqual(report_gated.overall_score, 84.9)
 
     # Scenario 28: Code Tutorial Readability Stripping (Exempts Technical Code from False Alarms)
     def test_scenario_28_code_tutorial_readability_stripping(self):
@@ -943,6 +965,111 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertFalse(safe)
         safe, _ = is_safe_target_url("ftp://ftp.example.com")
         self.assertFalse(safe)
+
+    # Scenario 33: Insufficient Crawl Coverage Release Gate
+    def test_scenario_33_insufficient_crawl_coverage_release_gate(self):
+        # 10 discovered URLs, but only 2 crawled (20% coverage) -> INSUFFICIENT_COVERAGE
+        pages = [
+            PageData(
+                url=f"https://large-site.example.com/page-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                title=f"Sample Page {i} Title",
+                headings=[HeadingData(level=1, text=f"Heading {i}")],
+                meta_description="Sample description that meets normal length requirements for the page.",
+                word_count=400,
+                has_viewport=True,
+            )
+            for i in range(2)
+        ]
+        crawl = CrawlResult(
+            start_url="https://large-site.example.com/",
+            pages=pages,
+            pages_discovered_count=10,
+            crawl_coverage_pct=20.0,
+        )
+        report = self.report_gen.generate_report(crawl)
+        self.assertEqual(report.audit_status, "INSUFFICIENT_COVERAGE")
+        self.assertIn("INSUFFICIENT CRAWL COVERAGE", report.status_message)
+
+        # Unmatched rules in ledger must reflect sample qualification, not unqualified full site PASS
+        sample_checks = [c for c in report.check_ledger if "Full site unverified" in c.evidence]
+        self.assertGreaterEqual(len(sample_checks), 20)
+
+    # Scenario 34: Precision Route Classification (Code Tutorials vs Auth/App Routes)
+    def test_scenario_34_precision_route_classification(self):
+        from godlike_seo.analyzers.page_classifier import PageClassifier
+        classifier = PageClassifier()
+
+        # Public educational and programming tutorial routes must NOT be misclassified as auth/app gates
+        tutorial_urls = [
+            "https://www.geeksforgeeks.org/register/in-c",
+            "https://www.geeksforgeeks.org/password/hash",
+            "https://example.com/tutorials/auth/oauth-guide",
+            "https://example.com/payment-methods",
+            "https://example.com/portal-docs",
+            "https://example.com/billing-faq",
+        ]
+        for u in tutorial_urls:
+            res = classifier.classify(u, 200, "<html><body><h1>Guide</h1></body></html>")
+            self.assertEqual(res["page_type"], PageType.PUBLIC_CONTENT, f"URL {u} was incorrectly classified as {res['page_type']}")
+
+        # Real auth and application transaction routes must be correctly classified
+        auth_urls = [
+            "https://example.com/login",
+            "https://example.com/signup",
+            "https://example.com/users/register",
+            "https://example.com/accounts/login",
+            "https://example.com/forgot-password",
+        ]
+        for u in auth_urls:
+            res = classifier.classify(u, 200, "<html><body><h1>Sign In</h1></body></html>")
+            self.assertEqual(res["page_type"], PageType.AUTHENTICATION, f"URL {u} was not classified as AUTHENTICATION")
+
+        app_urls = [
+            "https://example.com/checkout",
+            "https://example.com/cart",
+            "https://example.com/account/billing",
+            "https://example.com/dashboard/manage",
+        ]
+        for u in app_urls:
+            res = classifier.classify(u, 200, "<html><body><h1>App</h1></body></html>")
+            self.assertEqual(res["page_type"], PageType.USER_APP_ROUTE, f"URL {u} was not classified as USER_APP_ROUTE")
+
+    # Scenario 35: Prerequisite Check Ledger Truthfulness (SKIPPED and NOT_APPLICABLE)
+    def test_scenario_35_prerequisite_check_ledger_truthfulness(self):
+        # 1 single page crawled, robots and sitemaps not attempted
+        page = PageData(
+            url="https://solo-page.example.com/",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Solo Page Title",
+            headings=[HeadingData(level=1, text="Solo Heading")],
+            meta_description="A solo page meta description for evaluating ledger prerequisite truthfulness.",
+            word_count=500,
+            has_viewport=True,
+        )
+        crawl = CrawlResult(
+            start_url="https://solo-page.example.com/",
+            pages=[page],
+            pages_discovered_count=1,
+            crawl_coverage_pct=100.0,
+            robots_attempted=False,
+            sitemaps_attempted=False,
+        )
+        report = self.report_gen.generate_report(crawl)
+
+        ledger_map = {c.rule_id: c for c in report.check_ledger}
+
+        # Sitemap (TECH-006) and Robots (TECH-007) must be SKIPPED
+        self.assertEqual(ledger_map["TECH-006"].status, CheckStatus.SKIPPED)
+        self.assertEqual(ledger_map["TECH-007"].status, CheckStatus.SKIPPED)
+
+        # Cross-page duplicate checks (CONTENT-002, ONPAGE-002) must be NOT_APPLICABLE with 1 page
+        self.assertEqual(ledger_map["CONTENT-002"].status, CheckStatus.NOT_APPLICABLE)
+        self.assertEqual(ledger_map["ONPAGE-002"].status, CheckStatus.NOT_APPLICABLE)
 
 
 if __name__ == "__main__":

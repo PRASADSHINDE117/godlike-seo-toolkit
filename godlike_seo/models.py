@@ -502,6 +502,8 @@ class CrawlResult(DictCompatible):
     pages_discovered_count: int = 0
     crawl_coverage_pct: float = 100.0
     robots_sitemaps: List[str] = field(default_factory=list)
+    sitemaps_attempted: bool = False
+    robots_attempted: bool = False
 
     # Link graph: source_url -> [(target_url, anchor_text)]
     link_graph: Dict[str, List[tuple]] = field(default_factory=dict)

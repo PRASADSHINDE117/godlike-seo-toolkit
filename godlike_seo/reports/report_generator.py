@@ -472,6 +472,24 @@ class ReportGenerator:
 
         eligible_indexable_count = link_audit.get("eligible_indexable_count", 0)
 
+        # Prerequisite execution tracking and coverage assessment
+        discovered_count = getattr(crawl_result, "pages_discovered_count", len(pages))
+        crawled_count = len(pages)
+        coverage_pct = getattr(crawl_result, "crawl_coverage_pct", round((crawled_count / max(1, discovered_count)) * 100.0, 1))
+        is_poor_coverage = (discovered_count >= 10 and (crawled_count < 3 or coverage_pct < 30.0))
+
+        sitemap_val = getattr(crawl_result, "sitemaps_attempted", None)
+        if sitemap_val is not None:
+            sitemap_attempted = bool(sitemap_val) or bool(getattr(crawl_result, "sitemap_urls", None))
+        else:
+            sitemap_attempted = bool(getattr(crawl_result, "sitemap_urls", None)) or (getattr(crawl_result, "parse_sitemap", True) if hasattr(crawl_result, "parse_sitemap") else True)
+
+        robots_val = getattr(crawl_result, "robots_attempted", None)
+        if robots_val is not None:
+            robots_attempted = bool(robots_val)
+        else:
+            robots_attempted = bool(getattr(crawl_result, "respect_robots_txt", True))
+
         for rule in RULE_CATALOG:
             r_id = rule["rule_id"]
             cat = rule["category"]
@@ -484,7 +502,7 @@ class ReportGenerator:
                 total_aff = list(dict.fromkeys([u for mc in matched_clusters for u in mc.affected_urls]))
                 ledger.append(CheckResult(
                     rule_id=r_id,
-                    rule_version="3.3",
+                    rule_version="3.3.1",
                     category=cat,
                     status=CheckStatus.FAIL,
                     title=r_title,
@@ -494,11 +512,11 @@ class ReportGenerator:
                     affected_urls=total_aff,
                 ))
             else:
-                # Special applicability conditions
+                # Specific prerequisite checks
                 if r_id == "LINK-001" and eligible_indexable_count == 0:
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.3",
+                        rule_version="3.3.1",
                         category=cat,
                         status=CheckStatus.NOT_APPLICABLE,
                         title=r_title,
@@ -507,10 +525,46 @@ class ReportGenerator:
                         affected_count=0,
                         affected_urls=[],
                     ))
+                elif r_id == "TECH-006" and not sitemap_attempted:
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.3.1",
+                        category=cat,
+                        status=CheckStatus.SKIPPED,
+                        title=r_title,
+                        description="Check skipped: XML sitemap discovery was not executed in this crawl session.",
+                        evidence="Sitemap evaluation not attempted.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
+                elif r_id == "TECH-007" and not robots_attempted:
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.3.1",
+                        category=cat,
+                        status=CheckStatus.SKIPPED,
+                        title=r_title,
+                        description="Check skipped: robots.txt evaluation was disabled in crawler configuration.",
+                        evidence="Robots.txt check skipped by configuration.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
+                elif r_id in ("CONTENT-002", "ONPAGE-002") and len(public_html_pages) < 2:
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.3.1",
+                        category=cat,
+                        status=CheckStatus.NOT_APPLICABLE,
+                        title=r_title,
+                        description="Not applicable: duplicate content/title comparison across distinct URLs requires at least 2 public HTML pages in crawl scope.",
+                        evidence=f"Only {len(public_html_pages)} public HTML page(s) crawled.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
                 elif len(public_html_pages) == 0 and cat in (IssueCategory.ON_PAGE, IssueCategory.CONTENT, IssueCategory.STRUCTURED_DATA, IssueCategory.MOBILE):
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.3",
+                        rule_version="3.3.1",
                         category=cat,
                         status=CheckStatus.NOT_APPLICABLE,
                         title=r_title,
@@ -519,10 +573,23 @@ class ReportGenerator:
                         affected_count=0,
                         affected_urls=[],
                     ))
+                elif is_poor_coverage:
+                    # Verified only on small sample
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.3.1",
+                        category=cat,
+                        status=CheckStatus.PASS,
+                        title=r_title,
+                        description=r_desc,
+                        evidence=f"Verified on crawled sample ({crawled_count} of {discovered_count} discovered pages; {coverage_pct:.1f}% coverage). Full site unverified.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
                 else:
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.3",
+                        rule_version="3.3.1",
                         category=cat,
                         status=CheckStatus.PASS,
                         title=r_title,
@@ -619,6 +686,22 @@ class ReportGenerator:
         critical_clusters = [c for c in clusters if c.severity == IssueSeverity.CRITICAL]
         high_clusters = [c for c in clusters if c.severity == IssueSeverity.HIGH]
 
+        # Scope-aware and type-aware release blockers:
+        # Only gate releases on issues that genuinely impair indexation, crawlability, or core navigation at scale
+        release_gating_high_clusters = []
+        for c in clusters:
+            if c.severity == IssueSeverity.HIGH:
+                aff_count = len(c.affected_urls)
+                aff_ratio = aff_count / max(1, len(pages))
+                if c.issue_id in ("CANONICAL_POINTS_TO_4XX", "CONFLICTING_CANONICAL_TAGS", "SEARCH_SNIPPET_BLOCKED"):
+                    release_gating_high_clusters.append(c)
+                elif c.issue_id == "HTTP_404_INTERNAL_LINKED" and (aff_count >= 2 or aff_ratio >= 0.05):
+                    release_gating_high_clusters.append(c)
+                elif c.issue_id == "MALFORMED_LOCATION_URL" and (aff_count >= 2 or aff_ratio >= 0.10):
+                    release_gating_high_clusters.append(c)
+                elif c.issue_id in ("DUPLICATE_PAGE_CONTENT", "DUPLICATE_TITLE_TAG") and aff_ratio >= 0.25:
+                    release_gating_high_clusters.append(c)
+
         if has_sitewide_noindex:
             if env_intent == "production":
                 audit_status = "INDEXATION_BLOCKED"
@@ -652,17 +735,23 @@ class ReportGenerator:
             crit_names = ", ".join(c.title for c in critical_clusters[:2])
             status_message = f"CRITICAL DEFECTS DETECTED: {len(critical_clusters)} critical blocker(s) identified ({crit_names}). Release blocked."
             overall_score = min(overall_score, 49.0)
-        elif len(high_clusters) > 0:
+        elif is_poor_coverage:
+            audit_status = "INSUFFICIENT_COVERAGE"
+            status_message = (
+                f"INSUFFICIENT CRAWL COVERAGE: Audited only {crawled_count} of {discovered_count} discovered URLs "
+                f"({coverage_pct:.1f}% coverage). Release gate cannot certify site health without representative crawl depth."
+            )
+        elif len(release_gating_high_clusters) > 0:
             audit_status = "NEEDS_REVIEW"
-            high_names = ", ".join(c.title for c in high_clusters[:2])
-            status_message = f"HIGH SEVERITY ISSUES: {len(high_clusters)} high-priority defect(s) require developer remediation ({high_names}). Release gated."
+            gating_names = ", ".join(c.title for c in release_gating_high_clusters[:2])
+            status_message = f"SYSTEMIC DEFECTS: {len(release_gating_high_clusters)} issue(s) impair indexation or site integrity ({gating_names}). Release gated."
             overall_score = min(overall_score, 84.9)
         elif overall_score < 70:
             audit_status = "NEEDS_REVIEW"
             status_message = f"Audit score ({overall_score}/100) is below acceptable release threshold (70/100)."
         else:
             audit_status = "PASS"
-            status_message = "All core technical, on-page, and social release criteria satisfied. Zero critical and zero high defects detected."
+            status_message = "All core technical, indexability, and architecture release criteria satisfied. Zero critical blockers detected."
 
         # 8. Actionable recommendations from clusters
         recommendations: List[str] = []

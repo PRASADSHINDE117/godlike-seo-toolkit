@@ -30,6 +30,7 @@ from rich.table import Table
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
+from godlike_seo import __version__
 from godlike_seo.auth import AuthConfig, AuthManager
 from godlike_seo.crawler import CrawlerConfig, SEOCrawler
 from godlike_seo.models import CrawlResult, SEOReport
@@ -48,9 +49,9 @@ DEFAULT_AUTH_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath
 
 
 @click.group()
-@click.version_option(version="3.3.1", prog_name="godlike-seo")
+@click.version_option(version=__version__, prog_name="godlike-seo")
 def cli():
-    """⚡ Godlike SEO Engine 3.3 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
+    """⚡ Godlike SEO Engine 3.3.1 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
     pass
 
 
@@ -110,7 +111,7 @@ def crawl(
     if not quiet:
         auth_msg = " [bold green](Authenticated via Playwright)[/]" if has_auth else ""
         console.print(Panel.fit(
-            f"[bold cyan]Godlike SEO Engine 3.1[/bold cyan]{auth_msg}\nTarget: [yellow]{url}[/yellow] | Max Pages: {max_pages} | Concurrency: {concurrency} | Env: {environment or 'auto'}",
+            f"[bold cyan]Godlike SEO Engine {__version__}[/bold cyan]{auth_msg}\nTarget: [yellow]{url}[/yellow] | Max Pages: {max_pages} | Concurrency: {concurrency} | Env: {environment or 'auto'}",
             border_style="cyan"
         ))
 

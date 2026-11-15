@@ -63,7 +63,7 @@ class ExcelReportGenerator:
         # ---------------------------------------------------------------
         # TAB 1: Summary & Health
         # ---------------------------------------------------------------
-        ws_summary["A1"] = "⚡ GODLIKE SEO ENGINE 3.1 - AUDIT REPORT"
+        ws_summary["A1"] = "⚡ GODLIKE SEO ENGINE 3.3.1 - AUDIT REPORT"
         ws_summary["A1"].font = self.title_font
         ws_summary["A2"] = f"Target: {report.url} | Domain: {report.domain} | Generated: {report.generated_at[:19]} UTC"
         ws_summary["A2"].font = Font(name="Calibri", size=10, italic=True, color="64748B")

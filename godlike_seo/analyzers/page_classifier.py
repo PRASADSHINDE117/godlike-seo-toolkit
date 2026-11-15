@@ -31,20 +31,20 @@ class PageType(str, Enum):
 
 
 # Segment-aware regex patterns identifying interactive user application workflows
-# Uses segment boundaries to prevent false positives like /user-guide/, /accounting/, /new-arrivals/
+# Target explicitly private, authenticated workflows while protecting public marketing and informational pages
 APP_ROUTE_PATTERNS = re.compile(
     r"/(?:my-[a-z0-9_-]+|create-listing|edit-listing|manage-listing|"
-    r"account|profile|settings|dashboard|admin|portal|"
-    r"bookings|orders|wishlist|cart|checkout|"
-    r"billing|payment|inbox|messages|notifications)(?:/|$|\?)",
+    r"wishlist|cart|checkout)(?:/|$|\?)|"
+    r"/(?:account|profile|settings|dashboard|admin|portal)/(?:edit|manage|settings|preferences|billing|orders|bookings|inbox|notifications)(?:/|$|\?)",
     re.I,
 )
 
-# Segment-aware regex patterns identifying authentication entry points
-# Uses segment boundaries so /author/ or /author-bio/ are never treated as auth gates
+# Segment-aware regex patterns identifying genuine authentication entry points
+# Avoids treating programming/security articles (/register/, /password/, /auth/) as auth gates
 AUTH_ROUTE_PATTERNS = re.compile(
-    r"/(?:login|signin|sign-in|log-in|signup|sign-up|register|registration|"
-    r"auth|authenticate|password|forgot-password|reset-password|logout)(?:/|$|\?)",
+    r"/(?:login|signin|sign-in|log-in|signup|sign-up|logout|signout|sign-out|"
+    r"forgot-password|reset-password|change-password)(?:/|$|\?)|"
+    r"/(?:users?|accounts?)/(?:login|signin|signup|sign_in|sign_up|register|password)(?:/|$|\?)",
     re.I,
 )
 
@@ -134,8 +134,9 @@ class PageClassifier:
             }
 
         # 5. Inspect HTML for soft login gate on otherwise public-looking URL
-        if html:
-            if PageClassifier._detect_login_form(html) and ("redirect=" in query or "next=" in query or "login" in html.lower()[:500]):
+        # Requires explicit auth interception redirect parameters (?redirect= or ?next= or ?return_to=)
+        if html and ("redirect=" in query or "next=" in query or "return_to=" in query or "returnurl=" in query):
+            if PageClassifier._detect_login_form(html):
                 return {
                     "page_type": PageType.AUTHENTICATION,
                     "is_app_route": True,
@@ -153,24 +154,30 @@ class PageClassifier:
 
     @staticmethod
     def _detect_login_form(html: str) -> bool:
-        """Detect whether HTML body is predominantly a user login form."""
+        """Detect whether HTML body is predominantly a user login form, ignoring code snippets."""
         if not html:
             return False
 
-        # Quick regex check for password inputs
-        if re.search(r'<input[^>]+type=["\']password["\']', html, re.I):
-            return True
+        # Strip code blocks and pre elements to prevent false positives on programming tutorials
+        clean_html = re.sub(r'<(?:pre|code)[^>]*>.*?</(?:pre|code)>', '', html, flags=re.S | re.I)
+
+        # Must have an actual <form> containing a password input
+        form_match = re.search(r'<form[^>]*>.*?</form>', clean_html, re.S | re.I)
+        if not form_match:
+            return False
+
+        form_content = form_match.group(0)
+        has_password = bool(re.search(r'<input[^>]+type=["\']password["\']', form_content, re.I))
+        if not has_password:
+            return False
 
         # Check for authentication markers
         auth_phrases = [
-            "sign in to your account",
-            "log in to your account",
-            "please sign in",
-            "enter your password",
-            "login to continue",
+            "sign in",
+            "log in",
+            "password",
+            "remember me",
+            "forgot password",
         ]
-        html_lower = html[:5000].lower()
-        if any(phrase in html_lower for phrase in auth_phrases):
-            return True
-
-        return False
+        form_lower = form_content.lower()
+        return any(phrase in form_lower for phrase in auth_phrases)
