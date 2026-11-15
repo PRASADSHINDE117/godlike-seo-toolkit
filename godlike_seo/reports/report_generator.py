@@ -155,17 +155,19 @@ RULE_CATALOG = [
     },
     {
         "rule_id": "ONPAGE-007",
-        "category": IssueCategory.SOCIAL,
-        "title": "Open Graph & Social Metadata Consistency",
-        "description": "Validates Open Graph tags, ensuring og:url is well-formed, matches canonical URL, and provides rich social previews.",
-        "issue_ids": {"MALFORMED_OG_URL", "OG_URL_CANONICAL_MISMATCH", "MISSING_OG_TITLE", "MISSING_OPEN_GRAPH", "MISSING_TWITTER_CARD"},
-    },
-    {
-        "rule_id": "ONPAGE-008",
         "category": IssueCategory.ON_PAGE,
         "title": "HTML Language & Encoding",
         "description": "Ensures the <html> element declares a valid lang attribute for internationalization and screen readers.",
         "issue_ids": {"MISSING_HTML_LANG"},
+    },
+
+    # Social & Open Graph
+    {
+        "rule_id": "SOC-001",
+        "category": IssueCategory.SOCIAL,
+        "title": "Open Graph & Social Metadata Consistency",
+        "description": "Validates Open Graph tags, ensuring og:url is well-formed, matches canonical URL, and provides rich social previews.",
+        "issue_ids": {"MALFORMED_OG_URL", "OG_URL_CANONICAL_MISMATCH", "MISSING_OG_TITLE", "MISSING_OPEN_GRAPH", "MISSING_TWITTER_CARD"},
     },
 
     # Content & Topical Depth
@@ -196,6 +198,13 @@ RULE_CATALOG = [
         "title": "Topical Context & Substance",
         "description": "Audits pages for introductory summaries, FAQs, or sufficient contextual copy to fulfill search intent.",
         "issue_ids": {"CONTENT_DEPTH_OPPORTUNITY"},
+    },
+    {
+        "rule_id": "CONTENT-005",
+        "category": IssueCategory.CONTENT,
+        "title": "Topical Keyword Overlap & Intent Differentiation",
+        "description": "Audits pages for overlapping target phrases in titles/headings, advising GSC query performance verification before consolidating URLs.",
+        "issue_ids": {"TOPICAL_KEYWORD_OVERLAP", "KEYWORD_CANNIBALIZATION_RISK"},
     },
 
     # Site Architecture & Links
@@ -250,11 +259,12 @@ RULE_CATALOG = [
         "description": "Confirms viewport is configured as 'width=device-width' rather than fixed pixel dimensions.",
         "issue_ids": {"FIXED_WIDTH_VIEWPORT"},
     },
+    # Performance & Page Experience
     {
-        "rule_id": "MOB-003",
+        "rule_id": "PERF-001",
         "category": IssueCategory.PERFORMANCE,
         "title": "Image Cumulative Layout Shift Prevention",
-        "description": "Checks that <img> elements declare explicit width and height attributes or CSS aspect-ratio.",
+        "description": "Checks that <img> elements declare explicit width and height attributes or CSS aspect-ratio to reserve layout space.",
         "issue_ids": {"IMAGE_MISSING_DIMENSIONS"},
     },
 
@@ -332,7 +342,14 @@ class ReportGenerator:
             if any(k in domain.lower() for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
                 env_intent = "staging"
             else:
-                env_intent = "production"
+                # Inspect response headers and cookies from initial pages for candidate / staging markers
+                for p in pages[:5]:
+                    h_str = " ".join(f"{k}:{v}" for k, v in p.headers.items()).lower()
+                    if any(term in h_str for term in ("candidate", "staging", "development", "preview", "tental_staging")):
+                        env_intent = "staging"
+                        break
+                if env_intent == "unknown" or not env_intent:
+                    env_intent = "production"
 
         # Update detector environment if needed
         self.issue_detector.environment = env_intent
@@ -418,7 +435,12 @@ class ReportGenerator:
         # 7. Group clusters by category and compute reproducible scores
         cat_clusters: Dict[IssueCategory, List[IssueCluster]] = {}
         for c in clusters:
-            cat_clusters.setdefault(c.category, []).append(c)
+            effective_cat = c.category
+            if effective_cat == IssueCategory.INDEXABILITY:
+                effective_cat = IssueCategory.TECHNICAL
+            elif effective_cat == IssueCategory.INTERNATIONAL:
+                effective_cat = IssueCategory.ON_PAGE
+            cat_clusters.setdefault(effective_cat, []).append(c)
 
         all_deductions: List[ScoreDeduction] = []
 
@@ -476,26 +498,32 @@ class ReportGenerator:
             )
 
         category_scores: Dict[str, CategoryScore] = {
-            "technical": build_category_score("Technical & Crawlability", IssueCategory.TECHNICAL, 0.25),
-            "on_page": build_category_score("On-Page & Metadata", IssueCategory.ON_PAGE, 0.25),
-            "content": build_category_score("Content & Topical Depth", IssueCategory.CONTENT, 0.20),
+            "technical": build_category_score("Technical & Crawlability", IssueCategory.TECHNICAL, 0.15),
+            "on_page": build_category_score("On-Page & Metadata", IssueCategory.ON_PAGE, 0.15),
+            "social": build_category_score("Social & Open Graph", IssueCategory.SOCIAL, 0.15),
+            "content": build_category_score("Content & Topical Depth", IssueCategory.CONTENT, 0.15),
             "internal_linking": build_category_score("Site Architecture & Links", IssueCategory.INTERNAL_LINKING, 0.15),
-            "mobile": build_category_score("Mobile & Responsive", IssueCategory.MOBILE, 0.10),
+            "performance": build_category_score("Performance & Experience", IssueCategory.PERFORMANCE, 0.10),
+            "structured_data": build_category_score("Structured Data & Schema", IssueCategory.STRUCTURED_DATA, 0.05),
+            "mobile": build_category_score("Mobile & Responsive", IssueCategory.MOBILE, 0.05),
             "security": build_category_score("Security & Standards", IssueCategory.SECURITY, 0.05),
         }
 
         # Weighted Master Score
-        overall_score = round(sum(cs.score * cs.weight for cs in category_scores.values()), 1)
+        raw_score = sum(cs.score * cs.weight for cs in category_scores.values())
+        overall_score = round(raw_score, 1)
 
-        # Release Gate Evaluation
+        # Release Gate Evaluation & Score Gating
         has_sitewide_noindex = any(c.issue_id == "SITEWIDE_INDEXATION_BLOCK" for c in clusters)
         has_staging_noindex = any(c.issue_id == "STAGING_ENVIRONMENT_NOINDEX_ACTIVE" for c in clusters)
+        critical_clusters = [c for c in clusters if c.severity == IssueSeverity.CRITICAL]
+        high_clusters = [c for c in clusters if c.severity == IssueSeverity.HIGH]
 
         if has_sitewide_noindex and env_intent != "staging":
             audit_status = "INDEXATION_BLOCKED"
             status_message = (
                 "CRITICAL RELEASE BLOCKER: Sitewide 'noindex' directive detected across public pages on production host. "
-                "Search engines cannot index this website. Master score capped at 0/100 (Indexation Blocked)."
+                "Search engines cannot index this website. SEO Master Score capped at 0/100 (Indexation Blocked)."
             )
             overall_score = 0.0
         elif has_staging_noindex or (has_sitewide_noindex and env_intent == "staging"):
@@ -504,15 +532,22 @@ class ReportGenerator:
                 "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
                 "from search engine indexing."
             )
-        elif any(c.severity == IssueSeverity.CRITICAL for c in clusters):
+        elif len(critical_clusters) > 0:
+            audit_status = "CRITICAL_BLOCKED"
+            crit_names = ", ".join(c.title for c in critical_clusters[:2])
+            status_message = f"CRITICAL DEFECTS DETECTED: {len(critical_clusters)} critical blocker(s) identified ({crit_names}). Release blocked."
+            overall_score = min(overall_score, 49.0)
+        elif len(high_clusters) > 0:
             audit_status = "NEEDS_REVIEW"
-            status_message = "Audit detected critical technical defects requiring developer remediation."
+            high_names = ", ".join(c.title for c in high_clusters[:2])
+            status_message = f"HIGH SEVERITY ISSUES: {len(high_clusters)} high-priority defect(s) require developer remediation ({high_names}). Release gated."
+            overall_score = min(overall_score, 84.9)
         elif overall_score < 70:
             audit_status = "NEEDS_REVIEW"
-            status_message = "Audit score is below acceptable deployment threshold (70/100)."
+            status_message = f"Audit score ({overall_score}/100) is below acceptable release threshold (70/100)."
         else:
             audit_status = "PASS"
-            status_message = "All core technical and on-page release criteria satisfied."
+            status_message = "All core technical, on-page, and social release criteria satisfied. Zero critical and zero high defects detected."
 
         # 8. Actionable recommendations from clusters
         recommendations: List[str] = []

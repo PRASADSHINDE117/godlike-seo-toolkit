@@ -48,9 +48,9 @@ DEFAULT_AUTH_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath
 
 
 @click.group()
-@click.version_option(version="3.1.0", prog_name="godlike-seo")
+@click.version_option(version="3.3.0", prog_name="godlike-seo")
 def cli():
-    """⚡ Godlike SEO Engine 3.1 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
+    """⚡ Godlike SEO Engine 3.3 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
     pass
 
 

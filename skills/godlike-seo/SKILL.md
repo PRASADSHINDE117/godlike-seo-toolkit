@@ -1,19 +1,19 @@
 ---
 name: seo-toolkit
-description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, and multi-format reporting (Markdown, Excel, HTML, JSON).
+description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, Kev-4B secondary decision verification, and multi-format reporting (Markdown, Excel, HTML, JSON).
 argument-hint: "[crawl|serp|keywords|test-login] [options]"
-version: 3.0.0
+version: 3.3.0
 ---
 
-# ⚡ Godlike SEO Engine 3.0: Agent Skills & Capability Guide
+# ⚡ Godlike SEO Engine 3.3: Agent Skills & Capability Guide
 
-The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
+The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, Kev-4B decision verification layer, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
 
 ---
 
 ## 🧭 Core Architecture & Agent Philosophy
 
-Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.0 solves this through three core principles that agents must understand:
+Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.3 solves this through six core principles that agents must understand:
 
 1. **Intent-Aware Page Classification (`PageClassifier`)**:
    Before running any audits, every URL and HTTP response is classified into one of six categories:
@@ -24,18 +24,51 @@ Most traditional SEO crawlers produce noisy false alarms by naively applying sta
    - `REDIRECT`: 3xx HTTP redirect responses.
    - `ERROR`: 4xx / 5xx HTTP error responses.
 
-2. **Strict Separation of Observation from Inference**:
+2. **Explicit Canonical Taxonomy (`CanonicalState`)**:
+   Eliminates deceptive canonical assumptions. Canonical declarations are categorized into:
+   - `MISSING`: No canonical tag declared. Google defaults to indexing the requested URL. Never described as "self-canonical".
+   - `SELF_REFERENCING`: Explicitly points to its own normalized URL.
+   - `CROSS_URL`: Points to a different internal or external URL.
+   - `RELATIVE`: Declares a relative URL path (flagged as HIGH risk).
+   - `MULTIPLE`: Conflicting canonical tags declared on the same page.
+   - `INVALID`: Malformed URL or non-HTTP scheme.
+
+3. **Release Gate Evaluation (`audit_status`) & Strict Quality Gating**:
+   Eliminates false green `PASS` scores when high-severity defects exist:
+   - `STAGING_PROTECTED`: Staging environment correctly protected with `noindex` directives. No score deduction applied.
+   - `INDEXATION_BLOCKED`: Release blocker! Production public pages blocked with sitewide `noindex`. Overall score capped at `0/100`.
+   - `CRITICAL_BLOCKED`: Critical technical defects detected. Score capped at max `49.0/100`.
+   - `NEEDS_REVIEW`: Triggered if ANY HIGH-severity defect is detected (e.g. `MALFORMED_OG_URL`, `HTTP_404_INTERNAL_LINKED`, duplicate titles). Master score is strictly capped at max `84.9/100`.
+   - `PASS`: Only achievable when **ZERO critical and ZERO high-severity defects** are present.
+
+4. **Calibrated 9-Category Scoring Architecture**:
+   All 35 deterministic rules map directly to 9 itemized weighted scoring categories (100% total):
+   - `Technical & Crawlability` (15%)
+   - `On-Page & Metadata` (15%)
+   - `Social & Open Graph` (15%)
+   - `Content & Topical Depth` (15%)
+   - `Site Architecture & Internal Links` (15%)
+   - `Performance & Page Experience` (10%)
+   - `Structured Data & Schema` (5%)
+   - `Mobile & Responsive` (5%)
+   - `Security & Standards` (5%)
+
+5. **Internal Link Graph & Redirect Reconciliation**:
+   Full bidirectional link mapping that exposes both `Requested URL`, `Final Resolved URL`, and `Redirect Chain` across all tabular views, preventing apparent link-graph omissions on redirected resources.
+
+6. **Strict Separation of Observation from Inference**:
+   Every diagnostic issue separates factual measurement from contextual risk:
+   - **Technical Observation**: The objective, measurable fact (e.g. *"Image lacks inline width/height attributes in static HTML"* or *"Pages share phrase 'machine learning' in <title>"*).
+   - **SEO Inference & Risk**: The nuanced ranking implication (e.g. *"May contribute to CLS if CSS aspect-ratio is absent"* vs *"Heuristic overlap in titles; verify with GSC queries before consolidating URLs"*).
+   - `PASS`: All release criteria satisfied.
+
+4. **Deterministic Rule Execution Ledger (`CheckResult`)**:
+   Replaces synthetic hardcoded test counts with real per-rule execution records across all categories. Each check records status (`PASS`, `FAIL`, `SKIPPED`, `NOT_APPLICABLE`), concrete evidence, and affected URLs. When 0 pages on a site are indexable, the orphan check is marked `NOT_APPLICABLE` rather than claiming tests passed.
+
+5. **Strict Separation of Observation from Inference**:
    Every diagnostic issue separates factual measurement from contextual risk:
    - **Technical Observation**: The objective, measurable fact (e.g. *"Server returned HTTP 404 for URL linked from 27 internal pages"* or *"Document does not declare a `<link rel='canonical'>` tag"*).
    - **SEO Inference & Risk**: The nuanced ranking implication (e.g. *"Breaks user navigation paths and wastes crawler budget"* vs *"On clean unique URLs, Google defaults to indexing the request URL; canonical tag is a defensive safeguard"*).
-
-3. **Transparent, Itemized Mathematical Scoring**:
-   Scores begin at `100.0` points per category and are reduced by calibrated deductions per **unique root-cause issue cluster** (not raw occurrence counts):
-   - **Critical Blocker (`-15.0 pts`)**: Directly blocks crawling or indexation (HTTP 5xx crashes, invalid SSL).
-   - **High Risk (`-8.0 pts`)**: Significantly degrades visibility (duplicate titles across public pages, broken internal links).
-   - **Medium Risk (`-3.0 pts`)**: Measurable ranking/UX defect (thin content, parameterized URL missing canonical).
-   - **Low Risk (`-1.0 pts`)**: Minor refinement (title too long/short, image missing explicit dimensions / CLS risk).
-   - **Informational (`0.0 pts`)**: Growth opportunities (Schema.org rich snippet opportunity, defensive self-referencing canonicals).
 
 ---
 
@@ -104,10 +137,12 @@ python -m godlike_seo crawl <URL> [OPTIONS]
 
 | Option | Flag | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `--max-pages` | `-m` | Maximum pages to crawl | `200` |
+| `--max-pages` | `-m` | Maximum pages to crawl | `50` |
 | `--depth` | `-d` | Maximum click depth from start URL | `3` |
 | `--concurrency` | `-c` | Number of concurrent async workers | `10` |
 | `--format` | `-f` | Report format: `all`, `md`, `xlsx`, `html`, `json` | `all` |
+| `--environment` | `-e` | Target environment intent: `production`, `staging`, `development` | `auto` |
+| `--render-js` | | Enable selective headless Playwright JS rendering | `False` |
 | `--output` | `-o` | Specific destination file path | Auto |
 | `--output-dir` | | Directory to store generated reports | Current Dir |
 | `--keyword` | `-k` | Target search query to benchmark ranking against | `None` |
@@ -285,17 +320,21 @@ The generated `.md` report is optimized for LLMs. Agents should follow this pars
 
 ## 📋 Agent Action Checklist for Common Issues
 
-When an agent is tasked with fixing issues detected by Godlike SEO 3.0, follow this standard procedure:
+When an agent is tasked with fixing issues detected by Godlike SEO 3.2, consult the generated `remediation_plan` in the audit JSON or follow this standard procedure:
 
-| Detected Issue ID | Agent Remediation Workflow |
-| :--- | :--- |
-| `HTTP_404_INTERNAL_LINKED` | Grep codebase for the broken URL string across templates/components (`href="/broken"`). Replace with active route or implement a 301 redirect in web server config (`nginx.conf` or framework routes). |
-| `DUPLICATE_TITLE_TAG` | Open page templates/metadata configs. Ensure dynamic or distinct `<title>` strings reflecting the specific page content (e.g. append `Category Name \| Brand`). |
-| `IMAGE_MISSING_DIMENSIONS` | Inspect template `<img>` tags. Add explicit `width` and `height` attributes matching natural image aspect ratio, or apply CSS `aspect-ratio: auto;` to prevent layout shifts (CLS). |
-| `MISSING_CANONICAL_WITH_QUERY` | In page `<head>`, dynamically render `<link rel="canonical" href="<clean_base_url>">` stripping query parameters. |
-| `KEYWORD_CANNIBALIZATION_RISK` | Audit search intent of the competing URLs. If they serve different intents, differentiate the primary H1 and Title keywords. If intents are identical, consolidate content to the strongest URL. |
-| `OPPORTUNITY_SCHEMA_MARKUP` | Generate JSON-LD script block (`<script type="application/ld+json">`) with appropriate Schema.org type (`Organization`, `Product`, `Article`, `FAQPage`) and insert into `<head>`. |
-| `ORPHANED_PAGE_DETECTED` | Add an internal anchor link from a relevant category hub, parent section, or blog post so search bots can traverse to this public page naturally. |
+| Detected Issue ID | Severity | Agent Remediation Workflow |
+| :--- | :---: | :--- |
+| `MALFORMED_OG_URL` | **HIGH** | Open document `<head>` or SEO layout component (`app/layout.tsx`, `pages/_app.tsx`). Replace unrendered `${slug}` or placeholder template variables with a validated absolute canonical URL fallback. |
+| `MULTIPLE_META_DESCRIPTIONS` | **MEDIUM** | Inspect document `<head>` and sub-view components. Ensure `<meta name="description">` is rendered at most once (e.g. use `key="description"` in Next.js `<Head>` to prevent duplication). |
+| `SEARCH_SNIPPET_BLOCKED` | **HIGH** | Remove `nosnippet` or change `max-snippet:0` to `max-snippet:-1` in `<meta name="robots">` or `X-Robots-Tag` header unless restriction is required for legal compliance. |
+| `OG_URL_CANONICAL_MISMATCH` | **MEDIUM** | Align `<meta property="og:url">` with the page's declared `<link rel="canonical">` href to consolidate social signals and link graph authority. |
+| `HTTP_404_INTERNAL_LINKED` | **HIGH** | Grep codebase for the broken URL string across templates/components (`href="/broken"`). Replace with active route or implement a 301 redirect in web server config (`nginx.conf` or framework routes). |
+| `DUPLICATE_TITLE_TAG` | **HIGH** | Open page templates/metadata configs. Ensure dynamic or distinct `<title>` strings reflecting the specific page content (e.g. append `Category Name \| Brand`). |
+| `IMAGE_MISSING_DIMENSIONS` | **LOW** | Inspect template `<img>` tags. Add explicit `width` and `height` attributes matching natural image aspect ratio, or apply CSS `aspect-ratio: auto;` to prevent layout shifts (CLS). |
+| `MISSING_CANONICAL_WITH_QUERY` | **MEDIUM** | In page `<head>`, dynamically render `<link rel="canonical" href="<clean_base_url>">` stripping query parameters. |
+| `KEYWORD_CANNIBALIZATION_RISK` | **MEDIUM** | Audit search intent of the competing URLs. If they serve different intents, differentiate the primary H1 and Title keywords. If intents are identical, consolidate content to the strongest URL. |
+| `OPPORTUNITY_SCHEMA_MARKUP` | **INFO** | Generate JSON-LD script block (`<script type="application/ld+json">`) with appropriate Schema.org type (`Organization`, `Product`, `Article`, `FAQPage`) and insert into `<head>`. |
+| `ORPHANED_PAGE_DETECTED` | **HIGH** | Add an internal anchor link from a relevant category hub, parent section, or blog post so search bots can traverse to this public page naturally. |
 
 ---
 

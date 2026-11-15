@@ -918,24 +918,24 @@ class SEOIssueDetector:
                         confidence=IssueConfidence.HIGH,
                     ))
 
-            # Missing width/height (CLS Risk)
+            # Missing width/height (Advisory CLS Check)
             if not img.width or not img.height:
                 if not src.startswith("data:image/") and src not in seen_missing_dim_srcs:
                     seen_missing_dim_srcs.add(src)
                     issues.append(SEOIssue(
                         issue_id="IMAGE_MISSING_DIMENSIONS",
-                        severity=IssueSeverity.LOW,
+                        severity=IssueSeverity.INFORMATIONAL,
                         category=IssueCategory.PERFORMANCE,
-                        title="Image Missing Explicit Width/Height Attributes",
-                        description=f"Image {src[:60]} lacks explicit width and height dimensions.",
+                        title="Image Missing Explicit Width/Height Attributes (Advisory CLS Check)",
+                        description=f"Image {src[:60]} lacks inline width and height HTML attributes.",
                         affected_url=page.url,
                         evidence=img.dom_snippet or f'<img src="{src}">',
-                        observation=f"Image tag ('{src[:40]}') lacks explicit width and height HTML attributes.",
-                        inference="Browser cannot allocate layout space prior to download, creating Cumulative Layout Shift (CLS) risk if not constrained via CSS aspect-ratio.",
-                        impact="May trigger layout shifts during page loading, negatively affecting Core Web Vitals (CLS).",
-                        recommendation="Add explicit width and height attributes (or CSS aspect-ratio) to reserve layout space.",
-                        verification_step="Verify width and height attributes exist on <img> or CSS aspect-ratio is defined.",
-                        confidence=IssueConfidence.HIGH,
+                        observation=f"Image tag ('{src[:40]}') lacks inline width and height HTML attributes. In static DOM analysis, CSS aspect-ratio or stylesheet layout rules cannot be determined without browser rendering.",
+                        inference="If CSS aspect-ratio is not declared in stylesheets, the browser cannot reserve layout space prior to asset load, risking Cumulative Layout Shift (CLS).",
+                        impact="May contribute to Cumulative Layout Shift (CLS) if layout space is unconstrained via CSS.",
+                        recommendation="Ensure CSS 'aspect-ratio' is declared on image wrappers, or provide explicit width and height HTML attributes to safeguard layout stability.",
+                        verification_step="Inspect layout stability in Chrome DevTools Performance panel or Lighthouse CLS audit.",
+                        confidence=IssueConfidence.LOW,
                     ))
         return issues
 

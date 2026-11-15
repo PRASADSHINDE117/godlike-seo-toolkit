@@ -30,12 +30,14 @@ class MarkdownReportGenerator:
         lines.append(f"**Target URL:** `{report.url}` | **Evaluated At:** `{report.generated_at[:19]} UTC`\n")
 
         # Status Banner
-        if report.audit_status == "INDEXATION_BLOCKED":
+        if report.audit_status in ("INDEXATION_BLOCKED", "CRITICAL_BLOCKED"):
             lines.append(f"> [!CAUTION]\n> **CRITICAL RELEASE BLOCKER:** {report.status_message}\n")
         elif report.audit_status == "STAGING_PROTECTED":
             lines.append(f"> [!NOTE]\n> **STAGING ENVIRONMENT DETECTED:** {report.status_message}\n")
         elif report.audit_status == "NEEDS_REVIEW":
-            lines.append(f"> [!WARNING]\n> **AUDIT REQUIRES REVIEW:** {report.status_message}\n")
+            lines.append(f"> [!WARNING]\n> **AUDIT REQUIRES REVIEW (GATED):** {report.status_message}\n")
+        elif report.audit_status == "PASS":
+            lines.append(f"> [!TIP]\n> **RELEASE AUDIT PASSED:** {report.status_message}\n")
 
         # 2. Executive Metrics
         lines.append("## 📊 Executive Overview")

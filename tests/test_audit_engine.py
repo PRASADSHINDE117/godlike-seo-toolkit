@@ -234,7 +234,7 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertEqual(len(orphan_issues), 1)
         self.assertEqual(orphan_issues[0].severity, IssueSeverity.HIGH)
 
-    # Scenario 10: Image missing width/height attributes (CLS Risk)
+    # Scenario 10: Image missing width/height attributes (Advisory CLS Check)
     def test_scenario_10_image_missing_dimensions(self):
         page = PageData(
             url="https://example.com/gallery",
@@ -252,7 +252,7 @@ class TestSEOAuditEngine(unittest.TestCase):
         issues = self.detector.analyze([page])
         dim_issues = [i for i in issues if i.issue_id == "IMAGE_MISSING_DIMENSIONS"]
         self.assertEqual(len(dim_issues), 1)
-        self.assertEqual(dim_issues[0].severity, IssueSeverity.LOW)
+        self.assertEqual(dim_issues[0].severity, IssueSeverity.INFORMATIONAL)
         self.assertEqual(dim_issues[0].category, IssueCategory.PERFORMANCE)
 
     # Scenario 11: Link Graph Mathematical Identity: Sum(Inlinks) == Sum(Outlinks) == Total Edges
@@ -769,6 +769,115 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertEqual(task.priority, "P1")
         self.assertIn("og:url", task.git_commit_proposal)
         self.assertIn("test_og_url_valid", task.playwright_test_code)
+
+    # Scenario 27: Calibrated Scoring Architecture & Release Gating (HIGH defect gates release)
+    def test_scenario_27_calibrated_scoring_and_release_gating(self):
+        page = PageData(
+            url="https://example.com/",
+            canonical_url="https://example.com/",
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Valid Title For Testing Scoring Engine",
+            headings=[HeadingData(level=1, text="Valid H1 Heading")],
+            meta_description="Valid length meta description for testing the scoring system correctly.",
+            word_count=500,
+            has_viewport=True,
+            og_tags={"og:url": "https://example.com/undefined", "og:title": "Example"},
+        )
+        crawl_result = CrawlResult(start_url="https://example.com/", pages=[page])
+        report = self.report_gen.generate_report(crawl_result)
+
+        # 1. Social category must exist and be deducted (-8 pts for MALFORMED_OG_URL)
+        self.assertIn("social", report.category_scores)
+        social_cs = report.category_scores["social"]
+        self.assertEqual(social_cs.score, 92.0)
+        self.assertEqual(len(social_cs.deductions), 1)
+        self.assertEqual(social_cs.deductions[0].points_deducted, 8.0)
+
+        # 2. Audit Status MUST NOT be green PASS when a HIGH defect exists
+        self.assertEqual(report.audit_status, "NEEDS_REVIEW")
+        self.assertIn("HIGH SEVERITY ISSUES", report.status_message)
+
+        # 3. Overall score must be capped below 85.0
+        self.assertLessEqual(report.overall_score, 84.9)
+
+        # 4. Deduction must be recorded in itemized all_deductions list
+        malformed_deductions = [d for d in report.all_deductions if "Open Graph" in d.rule_title or "og:url" in d.reason.lower()]
+        self.assertEqual(len(malformed_deductions), 1)
+
+    # Scenario 28: Code Tutorial Readability Stripping (Exempts Technical Code from False Alarms)
+    def test_scenario_28_code_tutorial_readability_stripping(self):
+        from godlike_seo.analyzers.content_analyzer import ContentAnalyzer
+        analyzer = ContentAnalyzer()
+
+        tutorial_text = (
+            "In this tutorial we learn how to implement binary search in Python.\n"
+            "Binary search runs in logarithmic time complexity O(log n).\n"
+            "Here is the complete implementation with helper methods:\n"
+            "def binary_search(arr, target):\n"
+            "    left = 0\n"
+            "    right = len(arr) - 1\n"
+            "    while left <= right:\n"
+            "        mid = left + (right - left) // 2\n"
+            "        if arr[mid] == target:\n"
+            "            return mid\n"
+            "        elif arr[mid] < target:\n"
+            "            left = mid + 1\n"
+            "        else:\n"
+            "            right = mid - 1\n"
+            "    return -1\n"
+            "# Run the code snippet\n"
+            "arr = [1, 3, 5, 7, 9, 11]\n"
+            "print(binary_search(arr, 7))\n"
+        )
+        page = PageData(
+            url="https://example.com/tutorials/binary-search",
+            text_content=tutorial_text,
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Python Binary Search Tutorial",
+            headings=[HeadingData(level=1, text="Binary Search Tutorial")],
+            word_count=350,
+        )
+        result = analyzer.analyze([page])
+        # Assert no false positive "Content Difficult to Read" issue on this technical tutorial
+        diff_issues = [i for i in result.get("issues", []) if i.issue_id == "CONTENT_DIFFICULT_READABILITY"]
+        self.assertEqual(len(diff_issues), 0)
+
+    # Scenario 29: Heuristic Keyword Overlap (INFORMATIONAL, 0 penalty)
+    def test_scenario_29_heuristic_keyword_overlap(self):
+        from godlike_seo.analyzers.content_analyzer import ContentAnalyzer
+        analyzer = ContentAnalyzer()
+
+        p1 = PageData(
+            url="https://example.com/machine-learning-basics",
+            title="Complete Machine Learning Tutorial Guide",
+            headings=[HeadingData(level=1, text="Machine Learning Tutorial")],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            word_count=300,
+            text_content="Introduction to supervised and unsupervised machine learning algorithms.",
+            is_indexable=True,
+        )
+        p2 = PageData(
+            url="https://example.com/advanced-machine-learning",
+            title="Advanced Machine Learning Tutorial Course",
+            headings=[HeadingData(level=1, text="Machine Learning Tutorial")],
+            has_html=True,
+            status_code=200,
+            page_type=PageType.PUBLIC_CONTENT,
+            word_count=300,
+            text_content="Deep neural networks and reinforcement machine learning architectures.",
+            is_indexable=True,
+        )
+        result = analyzer.analyze([p1, p2])
+        overlap_issues = [i for i in result.get("issues", []) if i.issue_id == "TOPICAL_KEYWORD_OVERLAP"]
+        self.assertGreaterEqual(len(overlap_issues), 1)
+        self.assertEqual(overlap_issues[0].severity, IssueSeverity.INFORMATIONAL)
+        self.assertIn("Google Search Console", overlap_issues[0].observation)
 
 
 if __name__ == "__main__":

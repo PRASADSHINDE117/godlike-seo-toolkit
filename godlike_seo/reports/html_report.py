@@ -65,7 +65,7 @@ class HTMLReportGenerator:
         js_status = "Enabled" if (crawl_config and crawl_config.js_rendering_enabled) else "HTTP (Static DOM)"
 
         status_banner_html = ""
-        if report.audit_status == "INDEXATION_BLOCKED":
+        if report.audit_status in ("INDEXATION_BLOCKED", "CRITICAL_BLOCKED"):
             status_banner_html = f"""
             <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #EF4444; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FCA5A5; font-size: 0.92rem;">
                 <strong style="color: #EF4444;">🚨 CRITICAL RELEASE BLOCKER:</strong> {html.escape(report.status_message)}
@@ -80,7 +80,13 @@ class HTMLReportGenerator:
         elif report.audit_status == "NEEDS_REVIEW":
             status_banner_html = f"""
             <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid #F59E0B; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #FDE68A; font-size: 0.92rem;">
-                <strong style="color: #F59E0B;">⚠️ AUDIT REQUIRES ATTENTION:</strong> {html.escape(report.status_message)}
+                <strong style="color: #F59E0B;">⚠️ AUDIT REQUIRES ATTENTION (GATED):</strong> {html.escape(report.status_message)}
+            </div>
+            """
+        elif report.audit_status == "PASS":
+            status_banner_html = f"""
+            <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid #10B981; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; color: #A7F3D0; font-size: 0.92rem;">
+                <strong style="color: #10B981;">✓ RELEASE AUDIT PASSED:</strong> {html.escape(report.status_message)}
             </div>
             """
 
@@ -518,7 +524,7 @@ class HTMLReportGenerator:
                 <p>Diagnostic evaluation for <strong>{html.escape(report.url)}</strong></p>
             </div>
             <div>
-                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.1</span>
+                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38BDF8; padding: 6px 14px; font-size: 0.82rem;">EVIDENCE ENGINE 3.3</span>
             </div>
         </header>
 
@@ -555,7 +561,10 @@ class HTMLReportGenerator:
         <!-- Scores & Methodology -->
         <div class="grid-2">
             <div class="card score-card">
-                <h3 style="margin-bottom: 10px;">Overall SEO Health</h3>
+                <h3 style="margin-bottom: 8px;">Overall SEO Health</h3>
+                <div style="margin-bottom: 12px;">
+                    <span class="badge" style="background: {'rgba(239, 68, 68, 0.2)' if 'BLOCKED' in report.audit_status else ('rgba(245, 158, 11, 0.2)' if report.audit_status == 'NEEDS_REVIEW' else ('rgba(59, 130, 246, 0.2)' if report.audit_status == 'STAGING_PROTECTED' else 'rgba(16, 185, 129, 0.2)'))}; color: {'#EF4444' if 'BLOCKED' in report.audit_status else ('#F59E0B' if report.audit_status == 'NEEDS_REVIEW' else ('#60A5FA' if report.audit_status == 'STAGING_PROTECTED' else '#10B981'))}; padding: 5px 12px; font-weight: bold; font-size: 0.82rem;">{report.audit_status}</span>
+                </div>
                 <svg width="180" height="180" class="svg-dial">
                     <circle cx="90" cy="90" r="{radius}" class="dial-bg"></circle>
                     <circle cx="90" cy="90" r="{radius}" class="dial-progress" stroke="{score_color}"></circle>

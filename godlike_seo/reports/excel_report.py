@@ -186,10 +186,10 @@ class ExcelReportGenerator:
         # ---------------------------------------------------------------
         ws_pages = wb.create_sheet(title="All Evaluated Pages")
         headers_pages = [
-            "URL", "Status", "Technical Classification", "Content Type", "Is Indexable", "Indexability Reason",
-            "Canonical State", "Canonical URL", "Internal Inlinks", "Internal Outlinks", "External Outlinks",
-            "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport", "Images Count",
-            "Structured Data Count", "OG URL"
+            "Requested URL", "Final Resolved URL", "Redirect Chain", "Status", "Technical Classification", "Content Type",
+            "Is Indexable", "Indexability Reason", "Canonical State", "Canonical URL", "Internal Inlinks", "Internal Outlinks",
+            "External Outlinks", "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport",
+            "Images Count", "Structured Data Count", "OG URL"
         ]
         for c_idx, h in enumerate(headers_pages, start=1):
             cell = ws_pages.cell(row=1, column=c_idx, value=h)
@@ -207,32 +207,43 @@ class ExcelReportGenerator:
                 canon_state_val = canon_state.value if hasattr(canon_state, "value") else str(canon_state or "missing")
                 schema_cnt = len(getattr(page, "structured_data", []))
                 og_url_val = (page.open_graph.og_url if page.open_graph else "") or (page.og_tags.get("og:url", "") if page.og_tags else "")
+                chain_parts = []
+                for hop in (page.redirect_chain or []):
+                    if hasattr(hop, "url"):
+                        chain_parts.append(f"{hop.url} ({hop.status_code})")
+                    elif isinstance(hop, dict) and "url" in hop:
+                        chain_parts.append(f"{hop['url']} ({hop.get('status_code', 301)})")
+                    else:
+                        chain_parts.append(str(hop))
+                chain_str = " -> ".join(chain_parts) if chain_parts else "Direct (200)"
 
                 ws_pages.cell(row=r_idx, column=1, value=page.url)
-                ws_pages.cell(row=r_idx, column=2, value=page.status_code)
-                ws_pages.cell(row=r_idx, column=3, value=pt_val.replace('_', ' ').upper())
-                ws_pages.cell(row=r_idx, column=4, value=page.content_type)
-                ws_pages.cell(row=r_idx, column=5, value="Yes" if page.is_indexable else "No")
-                ws_pages.cell(row=r_idx, column=6, value=page.indexability_reason or ("Indexable" if page.is_indexable else "Non-indexable"))
-                ws_pages.cell(row=r_idx, column=7, value=canon_state_val)
-                ws_pages.cell(row=r_idx, column=8, value=page.canonical_url or "")
-                ws_pages.cell(row=r_idx, column=9, value=in_inlinks)
-                ws_pages.cell(row=r_idx, column=10, value=in_outlinks)
-                ws_pages.cell(row=r_idx, column=11, value=ex_outlinks)
-                ws_pages.cell(row=r_idx, column=12, value=round(page.response_time_ms, 1))
-                ws_pages.cell(row=r_idx, column=13, value=page.word_count)
-                ws_pages.cell(row=r_idx, column=14, value=len(page.h1_tags))
-                ws_pages.cell(row=r_idx, column=15, value=page.title)
-                ws_pages.cell(row=r_idx, column=16, value=page.meta_description)
-                ws_pages.cell(row=r_idx, column=17, value="Yes" if page.has_viewport else "No")
-                ws_pages.cell(row=r_idx, column=18, value=len(page.images))
-                ws_pages.cell(row=r_idx, column=19, value=schema_cnt)
-                ws_pages.cell(row=r_idx, column=20, value=og_url_val)
+                ws_pages.cell(row=r_idx, column=2, value=page.final_url or page.url)
+                ws_pages.cell(row=r_idx, column=3, value=chain_str)
+                ws_pages.cell(row=r_idx, column=4, value=page.status_code)
+                ws_pages.cell(row=r_idx, column=5, value=pt_val.replace('_', ' ').upper())
+                ws_pages.cell(row=r_idx, column=6, value=page.content_type)
+                ws_pages.cell(row=r_idx, column=7, value="Yes" if page.is_indexable else "No")
+                ws_pages.cell(row=r_idx, column=8, value=page.indexability_reason or ("Indexable" if page.is_indexable else "Non-indexable"))
+                ws_pages.cell(row=r_idx, column=9, value=canon_state_val)
+                ws_pages.cell(row=r_idx, column=10, value=page.canonical_url or "")
+                ws_pages.cell(row=r_idx, column=11, value=in_inlinks)
+                ws_pages.cell(row=r_idx, column=12, value=in_outlinks)
+                ws_pages.cell(row=r_idx, column=13, value=ex_outlinks)
+                ws_pages.cell(row=r_idx, column=14, value=round(page.response_time_ms, 1))
+                ws_pages.cell(row=r_idx, column=15, value=page.word_count)
+                ws_pages.cell(row=r_idx, column=16, value=len(page.h1_tags))
+                ws_pages.cell(row=r_idx, column=17, value=page.title)
+                ws_pages.cell(row=r_idx, column=18, value=page.meta_description)
+                ws_pages.cell(row=r_idx, column=19, value="Yes" if page.has_viewport else "No")
+                ws_pages.cell(row=r_idx, column=20, value=len(page.images))
+                ws_pages.cell(row=r_idx, column=21, value=schema_cnt)
+                ws_pages.cell(row=r_idx, column=22, value=og_url_val)
 
-                for c in range(1, 21):
+                for c in range(1, 23):
                     ws_pages.cell(row=r_idx, column=c).border = self.border
 
-        self._apply_table_styling(ws_pages, 1, 20)
+        self._apply_table_styling(ws_pages, 1, 22)
 
         # ---------------------------------------------------------------
         # TAB 4: Orphaned Pages
@@ -259,7 +270,7 @@ class ExcelReportGenerator:
         # TAB 5: Internal Link Graph
         # ---------------------------------------------------------------
         ws_links = wb.create_sheet(title="Internal Link Graph")
-        headers_links = ["Source URL", "Target URL", "Anchor Text", "Link Location"]
+        headers_links = ["Source (Requested URL)", "Source (Final Resolved URL)", "Target URL", "Anchor Text", "Link Location"]
         for c_idx, h in enumerate(headers_links, start=1):
             cell = ws_links.cell(row=1, column=c_idx, value=h)
             cell.font = self.header_font
@@ -269,25 +280,27 @@ class ExcelReportGenerator:
         if report.crawl_result and report.crawl_result.pages:
             seen_edges = set()
             for p in report.crawl_result.pages:
-                src = p.final_url or p.url
+                req_src = p.url
+                res_src = p.final_url or p.url
                 for link in p.internal_links:
                     tgt = (link.href or link.url or "").strip()
                     if not tgt:
                         continue
                     anchor = (link.anchor_text or link.anchor or "").strip()
                     loc = getattr(link, "location", "body")
-                    edge_key = (src, tgt, anchor, loc)
+                    edge_key = (req_src, res_src, tgt, anchor, loc)
                     if edge_key not in seen_edges:
                         seen_edges.add(edge_key)
-                        ws_links.cell(row=row_counter, column=1, value=src)
-                        ws_links.cell(row=row_counter, column=2, value=tgt)
-                        ws_links.cell(row=row_counter, column=3, value=anchor)
-                        ws_links.cell(row=row_counter, column=4, value=loc)
-                        for c in range(1, 5):
+                        ws_links.cell(row=row_counter, column=1, value=req_src)
+                        ws_links.cell(row=row_counter, column=2, value=res_src)
+                        ws_links.cell(row=row_counter, column=3, value=tgt)
+                        ws_links.cell(row=row_counter, column=4, value=anchor)
+                        ws_links.cell(row=row_counter, column=5, value=loc)
+                        for c in range(1, 6):
                             ws_links.cell(row=row_counter, column=c).border = self.border
                         row_counter += 1
 
-        self._apply_table_styling(ws_links, 1, 4)
+        self._apply_table_styling(ws_links, 1, 5)
 
         # ---------------------------------------------------------------
         # TAB 6: AI Agent Remediation Tasks

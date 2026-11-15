@@ -1,5 +1,5 @@
 """
-Godlike SEO Engine 3.1
+Godlike SEO Engine 3.3
 ======================
 
 An evidence-backed, production-grade Python SEO diagnostic suite featuring
@@ -7,7 +7,7 @@ deterministic URL normalization, root-cause issue clustering, transparent
 mathematical scoring, internal PageRank modeling, and competitive SERP reverse-engineering.
 """
 
-__version__ = "3.1.0"
+__version__ = "3.3.0"
 __author__ = "Godlike SEO Team"
 
 from godlike_seo.models import (

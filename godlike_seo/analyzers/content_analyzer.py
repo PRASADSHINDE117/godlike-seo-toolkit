@@ -101,16 +101,44 @@ class ContentAnalyzer:
         syllables = len(re.findall(r"[aeiouy]{1,2}", word))
         return max(1, syllables)
 
+    def _strip_code_for_readability(self, text: str) -> str:
+        """Strip source code blocks, syntax, variable declarations, and programming artifacts before readability analysis."""
+        lines = []
+        code_keywords = {
+            "import", "from", "function", "const", "var", "let", "def", "class", "return",
+            "public", "private", "protected", "static", "void", "print", "echo", "console.log",
+            "throws", "package", "namespace", "#include", "interface", "struct", "template",
+            "typedef", "val", "fun", "fn", "impl", "use", "pub"
+        }
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            first_word = re.split(r"[\s\(\[\{;]", stripped)[0].lower()
+            if first_word in code_keywords:
+                continue
+            if stripped.startswith(("//", "/*", "*", "<!--", "#include", "<!DOCTYPE", "using namespace")):
+                continue
+            symbol_count = sum(c in "{}[];()=<>+$%&|*^/\\~" for c in stripped)
+            if symbol_count >= 3 and symbol_count > len(stripped) * 0.15:
+                continue
+            lines.append(stripped)
+
+        clean_text = " ".join(lines)
+        clean_text = re.sub(r"\b[a-zA-Z]+_[a-zA-Z0-9_]+\b", "", clean_text)
+        return clean_text
+
     def analyze_readability(self, page: PageData) -> PageReadability:
         """Calculate Flesch Reading Ease and Flesch-Kincaid Grade Level."""
-        text = page.text_content or ""
+        raw_text = page.text_content or ""
+        text = self._strip_code_for_readability(raw_text)
         words = self._tokenize(text)
         word_count = len(words)
         if word_count == 0:
             return PageReadability(page.url, 0.0, 0.0, "No content", 0, 0)
 
         # Sentence counting
-        sentences = [s for s in re.split(r"[.!?]+", text) if s.strip()]
+        sentences = [s.strip() for s in re.split(r"[.!?]+", text) if len(s.strip().split()) >= 3]
         sentence_count = max(1, len(sentences))
 
         total_syllables = sum(self._count_syllables(w) for w in words)
@@ -134,7 +162,7 @@ class ContentAnalyzer:
         elif fre >= 30:
             label = "Difficult (College)"
         else:
-            label = "Very Difficult (Academic/Technical)"
+            label = "Technical / Specialized Content"
 
         return PageReadability(
             url=page.url,
@@ -275,36 +303,47 @@ class ContentAnalyzer:
 
         issues: List[SEOIssue] = []
 
-        # Convert cannibalization into SEOIssue objects
+        # Convert keyword overlap into heuristic SEOIssue objects
         for risk in cannibalization[:3]:
             issues.append(SEOIssue(
-                issue_id="KEYWORD_CANNIBALIZATION_RISK",
-                severity=IssueSeverity.MEDIUM,
+                issue_id="TOPICAL_KEYWORD_OVERLAP",
+                severity=IssueSeverity.INFORMATIONAL,
                 category=IssueCategory.CONTENT,
-                title=f"Potential Keyword Cannibalization: '{risk.keyword}'",
-                description=f"Multiple public pages ({len(risk.competing_urls)}) target the phrase '{risk.keyword}' in titles or headings.",
+                title=f"Heuristic Keyword Overlap: '{risk.keyword}' (Unverified Cannibalization)",
+                description=f"Multiple public pages ({len(risk.competing_urls)}) include '{risk.keyword}' in titles or headings.",
                 affected_url=risk.competing_urls[0],
                 evidence=f"Shared phrase '{risk.keyword}' found in titles across {len(risk.competing_urls)} URLs: {', '.join(risk.competing_urls[:2])}",
-                observation=f"Phrase '{risk.keyword}' appears in <title> or <h1> of multiple distinct public indexable pages.",
-                inference="Search engines may split query authority between these pages if they both attempt to rank for the same user intent.",
-                impact="May prevent either page from achieving top ranking positions if search intent overlaps.",
+                observation=f"Multiple public pages ({len(risk.competing_urls)}) include the phrase '{risk.keyword}' in <title> or <h1> tags. Without Google Search Console impression and query CTR data, this is heuristic keyword overlap rather than confirmed cannibalization.",
+                inference="Lexical overlap in titles or headings may suggest keyword conflict, but true cannibalization requires confirming in Google Search Console that both URLs receive competing search impressions for the exact same user query.",
+                impact="If both URLs target identical user intent, search engines may divide ranking signals between them. If they target distinct intents, overlap is benign.",
                 recommendation=risk.recommendation,
-                verification_step="Audit Google Search Console performance queries for both URLs to verify whether impressions conflict.",
-                confidence=IssueConfidence.MEDIUM,
+                verification_step="Inspect Google Search Console Search Results performance table filtering by the target query to check if impression shares are split across multiple URLs.",
+                confidence=IssueConfidence.LOW,
                 details={"competing_urls": risk.competing_urls},
             ))
 
-        # Flag difficult readability
+        # Flag difficult readability (only for general consumer prose, exempting technical tutorials / code references)
         for r in readability_reports:
             if r.flesch_reading_ease < 30 and r.word_count > 300:
-                issues.append(SEOIssue(
-                    severity=IssueSeverity.INFO,
-                    category=IssueCategory.CONTENT,
-                    title="Content Difficult to Read",
-                    description=f"Readability score is {r.flesch_reading_ease}/100 ({r.difficulty_label}).",
-                    affected_url=r.url,
-                    recommendation="Simplify sentence structures and shorten long paragraphs to improve user engagement and dwell time.",
-                ))
+                is_technical = any(
+                    t in (r.url.lower() + " " + r.difficulty_label.lower())
+                    for t in ("tutorial", "syntax", "algorithm", "data-structure", "geeksforgeeks", "docs", "api", "reference", "code", "guide")
+                )
+                if not is_technical:
+                    issues.append(SEOIssue(
+                        issue_id="CONTENT_DIFFICULT_READABILITY",
+                        severity=IssueSeverity.INFORMATIONAL,
+                        category=IssueCategory.CONTENT,
+                        title="Content Reading Complexity (Advisory)",
+                        description=f"Readability score is {r.flesch_reading_ease}/100 ({r.difficulty_label}).",
+                        affected_url=r.url,
+                        recommendation="Simplify complex sentence structures and shorten long paragraphs to improve general readability.",
+                        observation=f"Flesch Reading Ease measured at {r.flesch_reading_ease}/100.",
+                        inference="Highly complex prose may increase bounce rates for general consumer audiences.",
+                        impact="May reduce user dwell time on general audience content.",
+                        verification_step="Review readability in text editor or Hemingway editor.",
+                        confidence=IssueConfidence.LOW,
+                    ))
 
         return {
             "average_flesch_reading_ease": round(avg_fre, 1),

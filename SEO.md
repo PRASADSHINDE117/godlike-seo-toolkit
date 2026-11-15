@@ -2,10 +2,10 @@
 name: seo-toolkit
 description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, Kev-4B secondary decision verification, and multi-format reporting (Markdown, Excel, HTML, JSON).
 argument-hint: "[crawl|serp|keywords|test-login] [options]"
-version: 3.2.0
+version: 3.3.0
 ---
 
-# ⚡ Godlike SEO Engine 3.2: Agent Skills & Capability Guide
+# ⚡ Godlike SEO Engine 3.3: Agent Skills & Capability Guide
 
 The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engine, deep asynchronous web crawler, SERP competitor scraper, Kev-4B decision verification layer, and search intent research toolkit. It is built specifically for **autonomous AI agents, developers, and CI/CD pipelines**, prioritizing **diagnostic precision, zero false positives, and reproducible mathematical scoring**.
 
@@ -13,7 +13,7 @@ The **Godlike SEO Toolkit** is a production-grade, evidence-based SEO audit engi
 
 ## 🧭 Core Architecture & Agent Philosophy
 
-Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.1 solves this through five core principles that agents must understand:
+Most traditional SEO crawlers produce noisy false alarms by naively applying static content rules to private application workflows. Godlike 3.3 solves this through six core principles that agents must understand:
 
 1. **Intent-Aware Page Classification (`PageClassifier`)**:
    Before running any audits, every URL and HTTP response is classified into one of six categories:
@@ -33,11 +33,33 @@ Most traditional SEO crawlers produce noisy false alarms by naively applying sta
    - `MULTIPLE`: Conflicting canonical tags declared on the same page.
    - `INVALID`: Malformed URL or non-HTTP scheme.
 
-3. **Release Gate Evaluation (`audit_status`) & Environment Intent (`--environment`)**:
-   Distinguishes staging protection from production indexation failures:
+3. **Release Gate Evaluation (`audit_status`) & Strict Quality Gating**:
+   Eliminates false green `PASS` scores when high-severity defects exist:
    - `STAGING_PROTECTED`: Staging environment correctly protected with `noindex` directives. No score deduction applied.
    - `INDEXATION_BLOCKED`: Release blocker! Production public pages blocked with sitewide `noindex`. Overall score capped at `0/100`.
-   - `NEEDS_REVIEW`: Critical technical defects requiring developer intervention.
+   - `CRITICAL_BLOCKED`: Critical technical defects detected. Score capped at max `49.0/100`.
+   - `NEEDS_REVIEW`: Triggered if ANY HIGH-severity defect is detected (e.g. `MALFORMED_OG_URL`, `HTTP_404_INTERNAL_LINKED`, duplicate titles). Master score is strictly capped at max `84.9/100`.
+   - `PASS`: Only achievable when **ZERO critical and ZERO high-severity defects** are present.
+
+4. **Calibrated 9-Category Scoring Architecture**:
+   All 35 deterministic rules map directly to 9 itemized weighted scoring categories (100% total):
+   - `Technical & Crawlability` (15%)
+   - `On-Page & Metadata` (15%)
+   - `Social & Open Graph` (15%)
+   - `Content & Topical Depth` (15%)
+   - `Site Architecture & Internal Links` (15%)
+   - `Performance & Page Experience` (10%)
+   - `Structured Data & Schema` (5%)
+   - `Mobile & Responsive` (5%)
+   - `Security & Standards` (5%)
+
+5. **Internal Link Graph & Redirect Reconciliation**:
+   Full bidirectional link mapping that exposes both `Requested URL`, `Final Resolved URL`, and `Redirect Chain` across all tabular views, preventing apparent link-graph omissions on redirected resources.
+
+6. **Strict Separation of Observation from Inference**:
+   Every diagnostic issue separates factual measurement from contextual risk:
+   - **Technical Observation**: The objective, measurable fact (e.g. *"Image lacks inline width/height attributes in static HTML"* or *"Pages share phrase 'machine learning' in <title>"*).
+   - **SEO Inference & Risk**: The nuanced ranking implication (e.g. *"May contribute to CLS if CSS aspect-ratio is absent"* vs *"Heuristic overlap in titles; verify with GSC queries before consolidating URLs"*).
    - `PASS`: All release criteria satisfied.
 
 4. **Deterministic Rule Execution Ledger (`CheckResult`)**:

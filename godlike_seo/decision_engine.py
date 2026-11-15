@@ -403,8 +403,9 @@ class AgentRemediationPlanner:
 
         summary = (
             f"Generated {len(tasks)} verified remediation tasks for {domain}. "
-            f"High-priority tasks address technical defects in metadata and social tags; "
-            f"all tasks include code patches and automated Playwright verification scripts."
+            f"Architectural Note: Target components and code patches are hypothetical reference patterns "
+            f"(e.g. Next.js, Nuxt, Django, or CMS templates); verify against your project's specific repository layout. "
+            f"All tasks include deterministic Playwright regression verification scripts."
         )
 
         return RemediationPlan(
@@ -435,9 +436,9 @@ class AgentRemediationPlanner:
         else:
             priority = "P3"
 
-        # Tailor solutions based on issue type
+        # Tailor solutions based on issue type with clear hypothetical component labeling
         if issue_id == "MALFORMED_OG_URL":
-            component = "src/components/SEOHead.tsx (or app/layout.tsx / pages/_document.js)"
+            component = "Hypothetical Pattern: src/components/SEOHead.tsx (or Next.js app/layout.tsx / CMS template)"
             diff = (
                 "```tsx\n"
                 "// In SEOHead or Layout component:\n"
@@ -460,7 +461,7 @@ class AgentRemediationPlanner:
             commit = f"fix(seo): sanitize and validate Open Graph og:url in layout component ({sample_url})"
 
         elif issue_id == "MULTIPLE_META_DESCRIPTIONS":
-            component = "src/components/MetaTags.tsx (or app/layout.tsx / _document.js)"
+            component = "Hypothetical Pattern: src/components/MetaTags.tsx (or app/layout.tsx / _document.js)"
             diff = (
                 "```tsx\n"
                 "// Remove duplicate <meta name=\"description\"> rendering in child views:\n"
@@ -480,7 +481,7 @@ class AgentRemediationPlanner:
             commit = "fix(seo): deduplicate meta description tags in document head"
 
         elif issue_id == "OG_URL_CANONICAL_MISMATCH":
-            component = "src/components/HeadSEO.tsx (or layout metadata)"
+            component = "Hypothetical Pattern: src/components/HeadSEO.tsx (or layout metadata)"
             diff = (
                 "```tsx\n"
                 "- <meta property=\"og:url\" content={rawRequestedUrl} />\n"
@@ -499,7 +500,7 @@ class AgentRemediationPlanner:
             commit = "fix(seo): synchronize og:url with declared canonical link"
 
         elif issue_id == "SEARCH_SNIPPET_BLOCKED":
-            component = "next.config.js / server response headers / robots meta"
+            component = "Hypothetical Pattern: next.config.js / server response headers / robots meta"
             diff = (
                 "```html\n"
                 "- <meta name=\"robots\" content=\"nosnippet\">\n"
@@ -518,7 +519,7 @@ class AgentRemediationPlanner:
             commit = "fix(seo): lift snippet blocking directive in robots meta tag"
 
         elif issue_id == "IMAGE_MISSING_DIMENSIONS":
-            component = "src/components/ImageGallery.tsx (or <img> element)"
+            component = "Hypothetical Pattern: src/components/ImageGallery.tsx (or global CSS stylesheets)"
             diff = (
                 "```tsx\n"
                 "- <img src={imgUrl} alt={altText} />\n"
@@ -538,7 +539,7 @@ class AgentRemediationPlanner:
             commit = "perf(seo): add explicit width/height dimensions to content images to prevent CLS"
 
         else:
-            component = "Page Template / CMS Configuration"
+            component = "Hypothetical Pattern: Page Template / CMS Configuration"
             diff = (
                 "```text\n"
                 f"Inspect and remediate finding '{cluster.title}'.\n"
