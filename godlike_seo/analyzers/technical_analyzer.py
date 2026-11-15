@@ -137,7 +137,7 @@ class TechnicalAnalyzer:
                 ))
 
         # Check pages
-        total_ttfb = 0.0
+        total_latency = 0.0
         slow_pages = []
         uncompressed_pages = []
 
@@ -146,19 +146,19 @@ class TechnicalAnalyzer:
             sec_audit = self.audit_security_headers(headers)
             cache_comp = self.audit_caching_and_compression(headers)
 
-            total_ttfb += p.response_time_ms
+            total_latency += p.response_time_ms
 
-            # Slow TTFB (> 1500 ms)
+            # Slow HTTP Request Latency / Round-Trip Time (> 1500 ms)
             if p.response_time_ms > 1500:
                 slow_pages.append(p.url)
                 if p.response_time_ms > 3000:
                     issues.append(SEOIssue(
                         severity=IssueSeverity.CRITICAL,
                         category=IssueCategory.PERFORMANCE,
-                        title=f"Very Slow Page Load ({p.response_time_ms:.0f}ms)",
-                        description=f"Server response time of {p.response_time_ms:.0f}ms severely impairs Google crawl budget.",
+                        title=f"Very High HTTP Request Latency ({p.response_time_ms:.0f}ms)",
+                        description=f"HTTP round-trip latency of {p.response_time_ms:.0f}ms severely impairs crawler throughput and response pacing.",
                         affected_url=p.url,
-                        recommendation="Optimize database queries, enable server-side caching (Redis/OPcache), and use a CDN.",
+                        recommendation="Optimize database queries, enable server-side caching (Redis/OPcache), and place assets behind a CDN.",
                     ))
 
             # Missing Compression
@@ -186,7 +186,7 @@ class TechnicalAnalyzer:
                         recommendation="Configure your server to send 'X-Content-Type-Options: nosniff'.",
                     ))
 
-        avg_ttfb = total_ttfb / max(1, len(pages))
+        avg_latency = total_latency / max(1, len(pages))
 
         if uncompressed_pages:
             issues.append(SEOIssue(
@@ -200,7 +200,7 @@ class TechnicalAnalyzer:
 
         return {
             "ssl_info": ssl_info,
-            "average_response_time_ms": round(avg_ttfb, 1),
+            "average_response_time_ms": round(avg_latency, 1),
             "slow_pages_count": len(slow_pages),
             "uncompressed_pages_count": len(uncompressed_pages),
             "issues": issues,

@@ -78,11 +78,12 @@ class ExcelReportGenerator:
             ("Audit Release Status", report.audit_status),
             ("Environment Intent", report.environment_intent.upper()),
             ("Pages Crawled", stats.get("total_pages_crawled", len(report.crawl_result.pages) if report.crawl_result else 0)),
+            ("Crawl Coverage", f"{stats.get('crawl_coverage_pct', 100.0):.1f}%"),
             ("Unique Issue Clusters", stats.get("unique_issue_clusters", len(report.issue_clusters))),
             ("Raw Issue Occurrences", stats.get("total_raw_occurrences", len(report.raw_issues))),
             ("Critical Blockers", stats.get("critical_clusters_count", len(report.critical_clusters))),
             ("Orphaned Indexable Pages", stats.get("orphaned_pages_count", len(report.crawl_result.orphaned_pages) if report.crawl_result else 0)),
-            ("Avg TTFB (Server Response)", f"{stats.get('average_response_time_ms', 0):.0f} ms"),
+            ("Avg HTTP Latency / RTT", f"{stats.get('average_latency_rtt_ms') or stats.get('average_response_time_ms', 0):.0f} ms"),
         ]
         ws_summary["A5"] = "Core Performance Metric"
         ws_summary["B5"] = "Measured Value"
@@ -188,7 +189,7 @@ class ExcelReportGenerator:
         headers_pages = [
             "Requested URL", "Final Resolved URL", "Redirect Chain", "Status", "Technical Classification", "Content Type",
             "Is Indexable", "Indexability Reason", "Canonical State", "Canonical URL", "Internal Inlinks", "Internal Outlinks",
-            "External Outlinks", "TTFB (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport",
+            "External Outlinks", "HTTP Latency / RTT (ms)", "Word Count", "H1 Count", "Title", "Meta Description", "Has Viewport",
             "Images Count", "Structured Data Count", "OG URL"
         ]
         for c_idx, h in enumerate(headers_pages, start=1):

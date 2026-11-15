@@ -87,7 +87,7 @@ class CheckStatus(str, Enum):
 # ---------------------------------------------------------------------------
 
 class DictCompatible:
-    """Provides dict-like .get() and ['key'] access to dataclass fields."""
+    """Provides dict-like .get(), ['key'], and .to_dict() serialization for dataclass models."""
 
     def get(self, key: str, default: Any = None) -> Any:
         val = getattr(self, key, None)
@@ -106,6 +106,32 @@ class DictCompatible:
 
     def __contains__(self, key: str) -> bool:
         return hasattr(self, key) or key in getattr(self, "_aliases", {})
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert dataclass fields, nested models, and enums into a JSON-serializable dictionary."""
+        res: Dict[str, Any] = {}
+        for k, v in self.__dict__.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(v, Enum):
+                res[k] = v.value
+            elif hasattr(v, "to_dict"):
+                res[k] = v.to_dict()
+            elif isinstance(v, list):
+                res[k] = [
+                    item.to_dict() if hasattr(item, "to_dict")
+                    else (item.value if isinstance(item, Enum) else item)
+                    for item in v
+                ]
+            elif isinstance(v, dict):
+                res[k] = {
+                    dk: dv.to_dict() if hasattr(dv, "to_dict")
+                    else (dv.value if isinstance(dv, Enum) else dv)
+                    for dk, dv in v.items()
+                }
+            else:
+                res[k] = v
+        return res
 
 
 @dataclass
@@ -369,6 +395,7 @@ class PageData(DictCompatible):
 
     # Rendering & DOM snapshots
     rendered_dom: Optional[str] = None
+    raw_source_html: Optional[str] = None
     render_status: str = "static_http"
 
     # Error info
@@ -472,6 +499,9 @@ class CrawlResult(DictCompatible):
     orphaned_pages: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     environment: Optional[str] = None
+    pages_discovered_count: int = 0
+    crawl_coverage_pct: float = 100.0
+    robots_sitemaps: List[str] = field(default_factory=list)
 
     # Link graph: source_url -> [(target_url, anchor_text)]
     link_graph: Dict[str, List[tuple]] = field(default_factory=dict)

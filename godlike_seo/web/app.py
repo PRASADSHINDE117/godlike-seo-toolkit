@@ -11,10 +11,13 @@ Provides an interactive web dashboard for:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
+import socket
 import threading
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, render_template_string, request, Response
 
@@ -293,6 +296,40 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 """
 
 
+def is_safe_target_url(url: str) -> Tuple[bool, str]:
+    """Validate target URL to protect against SSRF (rejecting private, loopback, and cloud metadata targets)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False, f"Unsupported scheme '{parsed.scheme}'. Only http and https are permitted."
+        
+        hostname = parsed.hostname
+        if not hostname:
+            return False, "Invalid or missing hostname in target URL."
+
+        # Disallow localhost/metadata names
+        if hostname.lower() in ("localhost", "127.0.0.1", "::1", "metadata.google.internal", "instance-data"):
+            return False, f"Target host '{hostname}' is not permitted (local or cloud metadata host)."
+
+        # Resolve hostname to check IP safety
+        addr_info = socket.getaddrinfo(hostname, None)
+        for _, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            ip_obj = ipaddress.ip_address(ip_str)
+            if ip_obj.is_loopback:
+                return False, f"Resolution to loopback IP {ip_str} is prohibited."
+            if ip_obj.is_private:
+                return False, f"Resolution to private RFC 1918 network IP {ip_str} is prohibited."
+            if ip_obj.is_link_local:
+                return False, f"Resolution to link-local IP {ip_str} is prohibited."
+            if ip_obj.is_reserved or ip_obj.is_multicast:
+                return False, f"Resolution to reserved IP {ip_str} is prohibited."
+
+        return True, ""
+    except Exception as e:
+        return False, f"URL resolution/validation error: {e}"
+
+
 @app.route("/")
 def index():
     return render_template_string(HTML_DASHBOARD_TEMPLATE)
@@ -301,8 +338,12 @@ def index():
 @app.route("/api/crawl", methods=["POST"])
 def api_crawl():
     payload = request.get_json() or {}
-    url = payload.get("url", "https://example.com")
-    max_pages = int(payload.get("max_pages", 20))
+    url = payload.get("url", "https://example.com").strip()
+    max_pages = min(int(payload.get("max_pages", 20)), 200)
+
+    is_safe, err_msg = is_safe_target_url(url)
+    if not is_safe:
+        return jsonify({"error": f"SSRF Protection: {err_msg}"}), 400
 
     crawler = SEOCrawler(config=CrawlerConfig(max_pages=max_pages, max_depth=2, concurrency=5))
     crawl_result = asyncio.run(crawler.crawl(url))

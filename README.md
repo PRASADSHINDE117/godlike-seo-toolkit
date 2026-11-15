@@ -2,7 +2,7 @@
 name: seo-toolkit
 description: Complete guide for AI Agents to execute Godlike SEO audits, deep async site crawling, SERP scraping, competitor reverse-engineering, search intent keyword research, authenticated Playwright testing, Kev-4B secondary decision verification, and multi-format reporting (Markdown, Excel, HTML, JSON).
 argument-hint: "[crawl|serp|keywords|test-login] [options]"
-version: 3.3.0
+version: 3.3.1
 ---
 
 # ⚡ Godlike SEO Engine 3.3: Agent Skills & Capability Guide
@@ -29,7 +29,7 @@ Most traditional SEO crawlers produce noisy false alarms by naively applying sta
    - `MISSING`: No canonical tag declared. Google defaults to indexing the requested URL. Never described as "self-canonical".
    - `SELF_REFERENCING`: Explicitly points to its own normalized URL.
    - `CROSS_URL`: Points to a different internal or external URL.
-   - `RELATIVE`: Declares a relative URL path (flagged as HIGH risk).
+   - `RELATIVE`: Declares a relative URL path (flagged as advisory / low risk).
    - `MULTIPLE`: Conflicting canonical tags declared on the same page.
    - `INVALID`: Malformed URL or non-HTTP scheme.
 

@@ -251,7 +251,7 @@ class SEOIssueDetector:
                 if any(k in domain_str for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
                     env = "staging"
                 else:
-                    env = "production"
+                    env = "unknown"
 
             if env == "staging":
                 issues.append(SEOIssue(
@@ -270,7 +270,7 @@ class SEOIssueDetector:
                     verification_step="Before going live to production, verify curl -I https://production-domain/ does not return X-Robots-Tag: noindex.",
                     confidence=IssueConfidence.HIGH,
                 ))
-            else:
+            elif env == "production":
                 issues.append(SEOIssue(
                     issue_id="SITEWIDE_INDEXATION_BLOCK",
                     severity=IssueSeverity.CRITICAL,
@@ -286,6 +286,24 @@ class SEOIssueDetector:
                     recommendation="If this is PRODUCTION, immediately remove the 'X-Robots-Tag: noindex' header from your web server / CDN configuration.",
                     verification_step="Run `curl -I https://domain/` in your terminal and verify the response headers do NOT contain 'X-Robots-Tag: noindex'.",
                     confidence=IssueConfidence.HIGH,
+                ))
+            else:
+                # env == "unknown": conditional advisory without prematurely assuming production
+                issues.append(SEOIssue(
+                    issue_id="SITEWIDE_INDEXATION_BLOCK",
+                    severity=IssueSeverity.HIGH,
+                    category=IssueCategory.TECHNICAL,
+                    title="Sitewide Search Indexation Directive Active (Host Intent Unconfirmed)",
+                    description=f"Server serves explicit 'noindex' across {len(noindex_pages)} of {len(target_pages)} public URLs ({int(ratio * 100)}%). Verify if host is staging or production.",
+                    affected_url=root_url,
+                    affected_urls=all_affected,
+                    evidence=f"Directives detected across {len(noindex_pages)} URLs. Example: {sample_p.url} serves '{sample_directive}'",
+                    observation=f"{len(noindex_pages)} of {len(target_pages)} public pages ({int(ratio * 100)}%) instruct search engines not to index content. Host environment could not be verified automatically.",
+                    inference="If this domain is intended as a public production site, search engines will completely omit it from search results. If this is a pre-release or staging environment, this directive is appropriate and desired.",
+                    impact="Blocks search indexation. Action required depends on host deployment intent.",
+                    recommendation="Confirm domain purpose: retain 'noindex' if this is a staging/internal preview environment; remove 'noindex' before launching to public production.",
+                    verification_step="Check domain DNS and environment configuration to confirm whether this hostname serves live production traffic.",
+                    confidence=IssueConfidence.MEDIUM,
                 ))
         return issues
 
@@ -588,28 +606,28 @@ class SEOIssueDetector:
         if len(title) > TITLE_MAX_CHARS:
             issues.append(SEOIssue(
                 issue_id="TITLE_TOO_LONG",
-                severity=IssueSeverity.LOW,
+                severity=IssueSeverity.INFORMATIONAL,
                 category=IssueCategory.ON_PAGE,
-                title=f"Title Tag Exceeds Display Limit ({len(title)} chars)",
-                description=f"Title is {len(title)} characters long (recommended: {TITLE_MIN_CHARS}–{TITLE_MAX_CHARS}).",
+                title=f"Title Tag Exceeds Recommended Display Length ({len(title)} chars)",
+                description=f"Title is {len(title)} characters long (advisory display range: {TITLE_MIN_CHARS}–{TITLE_MAX_CHARS} chars).",
                 affected_url=page.url,
                 evidence=f"<title>{title}</title>",
-                impact="Google truncates desktop search titles exceeding ~600px width (approx. 60–65 characters) with an ellipsis (...), potentially cutting off secondary keywords.",
-                recommendation=f"Shorten title to under {TITLE_MAX_CHARS} characters while keeping primary keywords near the beginning.",
-                verification_step="Check SERP preview tool to ensure title renders without truncation.",
+                impact="Google truncates desktop search titles exceeding ~600px width with an ellipsis (...). This is a snippet presentation advisory and not an organic ranking penalty.",
+                recommendation=f"Consider shortening title to under {TITLE_MAX_CHARS} characters while keeping primary keywords near the beginning.",
+                verification_step="Check SERP preview tool to ensure title renders clearly without unintended cutoff.",
                 confidence=IssueConfidence.HIGH,
             ))
         elif len(title) < TITLE_MIN_CHARS:
             issues.append(SEOIssue(
                 issue_id="TITLE_TOO_SHORT",
-                severity=IssueSeverity.LOW,
+                severity=IssueSeverity.INFORMATIONAL,
                 category=IssueCategory.ON_PAGE,
-                title=f"Title Tag Under-Optimized ({len(title)} chars)",
-                description=f"Title has only {len(title)} characters (recommended minimum: {TITLE_MIN_CHARS}).",
+                title=f"Title Tag Concise / Under Standard Range ({len(title)} chars)",
+                description=f"Title has {len(title)} characters (recommended minimum: {TITLE_MIN_CHARS} chars).",
                 affected_url=page.url,
                 evidence=f"<title>{title}</title>",
-                impact="Short titles miss valuable topical keyword opportunities.",
-                recommendation="Expand title to incorporate secondary keywords or brand qualifier.",
+                impact="Short titles may miss opportunities to include relevant descriptive modifiers or brand naming.",
+                recommendation="Expand title to incorporate secondary keywords or brand qualifier if appropriate.",
                 verification_step="Verify expanded title in SERP preview.",
                 confidence=IssueConfidence.HIGH,
             ))
@@ -667,14 +685,14 @@ class SEOIssueDetector:
         if len(desc) > META_DESC_MAX_CHARS:
             issues.append(SEOIssue(
                 issue_id="META_DESCRIPTION_TOO_LONG",
-                severity=IssueSeverity.LOW,
+                severity=IssueSeverity.INFORMATIONAL,
                 category=IssueCategory.ON_PAGE,
-                title=f"Meta Description Too Long ({len(desc)} chars)",
-                description=f"Meta description is {len(desc)} characters (recommended max: {META_DESC_MAX_CHARS}).",
+                title=f"Meta Description Exceeds Recommended Display Length ({len(desc)} chars)",
+                description=f"Meta description is {len(desc)} characters (advisory snippet length: {META_DESC_MAX_CHARS} chars).",
                 affected_url=page.url,
                 evidence=f'<meta name="description" content="{desc[:120]}...">',
-                impact="Google truncates descriptions exceeding ~960px on desktop and ~680px on mobile.",
-                recommendation=f"Trim the description to under {META_DESC_MAX_CHARS} characters.",
+                impact="Google truncates descriptions exceeding ~960px on desktop and ~680px on mobile with an ellipsis (...). This is a snippet presentation advisory and not a direct ranking factor.",
+                recommendation=f"Consider trimming description to under {META_DESC_MAX_CHARS} characters so key messaging displays fully in search results.",
                 verification_step="Verify description renders fully in SERP snippet preview.",
                 confidence=IssueConfidence.HIGH,
             ))
@@ -787,16 +805,16 @@ class SEOIssueDetector:
             if not canon.startswith(("http://", "https://")):
                 issues.append(SEOIssue(
                     issue_id="RELATIVE_CANONICAL_URL",
-                    severity=IssueSeverity.HIGH,
+                    severity=IssueSeverity.LOW,
                     category=IssueCategory.TECHNICAL,
                     title="Relative Canonical URL Declared",
                     description=f"Canonical URL '{canon}' is relative instead of absolute.",
                     affected_url=page.url,
                     evidence=page.canonical_raw_snippet or f'href="{canon}"',
                     observation=f"Canonical link tag declares relative path '{canon}'.",
-                    inference="Search engine crawlers may resolve relative canonicals incorrectly or disregard them entirely.",
-                    impact="Search engine crawlers may resolve relative canonicals incorrectly, ignoring the directive.",
-                    recommendation="Ensure the canonical tag contains the full absolute URL including scheme and domain.",
+                    inference="While RFC standards allow relative URIs and search engines attempt to resolve them against document base, Google explicitly recommends absolute canonical URLs to prevent resolution errors across CDNs or reverse proxies.",
+                    impact="Search engine crawlers may occasionally resolve relative canonicals incorrectly if base tags or proxy paths vary.",
+                    recommendation="Ensure the canonical tag contains the full absolute URL including scheme and domain (e.g. https://example.com/path).",
                     verification_step="Confirm canonical starts with https://.",
                     confidence=IssueConfidence.HIGH,
                 ))
@@ -946,40 +964,49 @@ class SEOIssueDetector:
     def _check_content_quality(self, page: PageData, hash_map: Dict[str, List[PageData]]) -> List[SEOIssue]:
         issues = []
 
-        # Calibrated content depth check:
-        # Near-empty pages (< 25 words) are flagged as LOW; pages under 150 words receive an INFORMATIONAL opportunity
-        if page.word_count < 25:
-            issues.append(SEOIssue(
-                issue_id="VERY_THIN_CONTENT",
-                severity=IssueSeverity.LOW,
-                category=IssueCategory.CONTENT,
-                title=f"Extremely Low Text Content ({page.word_count} words)",
-                description=f"The page body contains only {page.word_count} words of text.",
-                affected_url=page.url,
-                evidence=f"Extracted plain text length: {page.word_count} words.",
-                observation=f"Extracted plain text length is {page.word_count} words.",
-                inference="Documents with virtually zero textual substance cannot fulfill organic search intent.",
-                impact="Pages with minimal substance struggle to demonstrate search intent fulfillment or achieve topical depth.",
-                recommendation="Enrich the page with substantive descriptive text, product specifications, or FAQs.",
-                verification_step="Review content word count and depth.",
-                confidence=IssueConfidence.HIGH,
-            ))
-        elif page.word_count < 150:
-            issues.append(SEOIssue(
-                issue_id="CONTENT_DEPTH_OPPORTUNITY",
-                severity=IssueSeverity.INFORMATIONAL,
-                category=IssueCategory.CONTENT,
-                title=f"Topical Content Depth Opportunity ({page.word_count} words)",
-                description=f"Page body contains {page.word_count} words of text.",
-                affected_url=page.url,
-                evidence=f"Extracted plain text length: {page.word_count} words.",
-                observation=f"Extracted plain text length is {page.word_count} words.",
-                inference="E-commerce listing, category, and transactional pages frequently utilize product card grids with concise copy. Adding 100-200 words of introductory context can improve relevance for long-tail queries without altering design.",
-                impact="Informational optimization opportunity; does not penalize transactional or category listing layouts.",
-                recommendation="Consider adding a brief introductory summary or FAQ section to strengthen long-tail keyword relevance.",
-                verification_step="Review whether additional contextual copy would benefit target search queries.",
-                confidence=IssueConfidence.MEDIUM,
-            ))
+        # Intent-aware content depth check:
+        # Exempt utility routes, search endpoints, contact pages, galleries, and legal disclaimers
+        path_lower = urlparse(page.url).path.lower()
+        is_intent_exempt = (
+            getattr(page, "page_type", None) != PageType.PUBLIC_CONTENT
+            or getattr(page, "is_auth_gate", False)
+            or any(seg in path_lower for seg in ("/contact", "/gallery", "/photos", "/search", "/terms", "/privacy", "/support", "/feedback", "/legal", "/media"))
+        )
+
+        if not is_intent_exempt:
+            # Near-empty pages (< 25 words) are flagged as LOW; pages under 150 words receive an INFORMATIONAL opportunity
+            if page.word_count < 25:
+                issues.append(SEOIssue(
+                    issue_id="VERY_THIN_CONTENT",
+                    severity=IssueSeverity.LOW,
+                    category=IssueCategory.CONTENT,
+                    title=f"Extremely Low Text Content ({page.word_count} words)",
+                    description=f"The page body contains only {page.word_count} words of text.",
+                    affected_url=page.url,
+                    evidence=f"Extracted plain text length: {page.word_count} words.",
+                    observation=f"Extracted plain text length is {page.word_count} words.",
+                    inference="Documents with virtually zero textual substance cannot fulfill organic search intent.",
+                    impact="Pages with minimal substance struggle to demonstrate search intent fulfillment or achieve topical depth.",
+                    recommendation="Enrich the page with substantive descriptive text, product specifications, or FAQs.",
+                    verification_step="Review content word count and depth.",
+                    confidence=IssueConfidence.HIGH,
+                ))
+            elif page.word_count < 150:
+                issues.append(SEOIssue(
+                    issue_id="CONTENT_DEPTH_OPPORTUNITY",
+                    severity=IssueSeverity.INFORMATIONAL,
+                    category=IssueCategory.CONTENT,
+                    title=f"Topical Content Depth Opportunity ({page.word_count} words)",
+                    description=f"Page body contains {page.word_count} words of text.",
+                    affected_url=page.url,
+                    evidence=f"Extracted plain text length: {page.word_count} words.",
+                    observation=f"Extracted plain text length is {page.word_count} words.",
+                    inference="E-commerce listing, category, and transactional pages frequently utilize product card grids with concise copy. Adding 100-200 words of introductory context can improve relevance for long-tail queries without altering design.",
+                    impact="Informational optimization opportunity; does not penalize transactional or category listing layouts.",
+                    recommendation="Consider adding a brief introductory summary or FAQ section to strengthen long-tail keyword relevance.",
+                    verification_step="Review whether additional contextual copy would benefit target search queries.",
+                    confidence=IssueConfidence.MEDIUM,
+                ))
 
         # True Duplicate Content check:
         # Strictly between PUBLIC_CONTENT pages, excluding auth gates and app routes

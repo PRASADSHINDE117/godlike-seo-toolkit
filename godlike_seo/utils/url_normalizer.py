@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import posixpath
 import re
-from urllib.parse import parse_qsl, quote, unquote_plus, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, unquote_plus, urlencode, urlparse, urlunparse
 
 # Common tracking parameters to strip for SEO equivalence
 TRACKING_PARAMS = {
@@ -29,8 +29,9 @@ def normalize_url(
     url: str,
     strip_tracking: bool = True,
     trailing_slash: str = "keep",  # "keep", "always", "never"
+    sort_query_params: bool = False,
 ) -> str:
-    """Deterministically normalize a URL for accurate comparison and deduplication."""
+    """Deterministically normalize a URL for accurate comparison and deduplication while preserving path semantics."""
     if not url:
         return ""
 
@@ -69,8 +70,8 @@ def normalize_url(
                 if resolved:
                     resolved.pop()
             else:
-                # Normalize percent-encoding in path
-                decoded_seg = unquote_plus(seg)
+                # Normalize percent-encoding in path using RFC 3986 unquote (preserves literal + in paths)
+                decoded_seg = unquote(seg)
                 resolved.append(quote(decoded_seg, safe="-._~:@!$&'()*+,;="))
 
         path = "/" + "/".join(resolved)
@@ -100,8 +101,9 @@ def normalize_url(
             norm_v = unquote_plus(v).strip()
             filtered_params.append((norm_k, norm_v))
 
-        # Sort parameters deterministically
-        filtered_params.sort(key=lambda x: (x[0], x[1]))
+        # Sort parameters only when explicitly configured
+        if sort_query_params:
+            filtered_params.sort(key=lambda x: (x[0], x[1]))
         if filtered_params:
             query_str = urlencode(filtered_params)
 

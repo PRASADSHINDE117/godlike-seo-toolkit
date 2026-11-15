@@ -48,7 +48,7 @@ DEFAULT_AUTH_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath
 
 
 @click.group()
-@click.version_option(version="3.3.0", prog_name="godlike-seo")
+@click.version_option(version="3.3.1", prog_name="godlike-seo")
 def cli():
     """⚡ Godlike SEO Engine 3.3 - Minimalist, Evidence-Backed CLI for Developers & AI Agents."""
     pass
@@ -225,9 +225,13 @@ def crawl(
             "url": report.url,
             "domain": report.domain,
             "overall_score": report.overall_score,
+            "audit_status": report.audit_status,
+            "status_message": report.status_message,
+            "environment_intent": report.environment_intent,
             "summary_stats": report.summary_stats,
             "category_scores": {k: {"name": cs.name, "score": cs.score, "tests_passed": cs.tests_passed, "tests_evaluated": cs.tests_evaluated, "deductions_count": len(cs.deductions)} for k, cs in report.category_scores.items()},
             "deductions": [{"rule": d.rule_title, "points": d.points_deducted, "reason": d.reason, "affected": d.affected_count} for d in report.all_deductions],
+            "check_ledger": [c.to_dict() for c in getattr(report, "check_ledger", [])],
             "issue_clusters": [c.to_dict() for c in report.issue_clusters],
             "recommendations": report.recommendations,
             "orphaned_pages": crawl_result.orphaned_pages,

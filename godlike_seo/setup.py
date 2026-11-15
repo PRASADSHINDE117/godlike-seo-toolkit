@@ -11,10 +11,11 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     ]
 
 setup(
-    name="godlike-seo",
-    version="1.0.0",
+    name="godlike-seo-toolkit",
+    version="3.3.1",
     author="Godlike SEO Team",
     author_email="team@godlikeseo.dev",
+    license="GPL-3.0-or-later",
     description=(
         "A comprehensive, production-grade Python SEO analysis toolkit "
         "featuring async web crawling, on-page analysis, SERP tracking, "
@@ -35,7 +36,7 @@ setup(
         "Intended Audience :: Information Technology",
         "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
         "Topic :: Internet :: WWW/HTTP :: Site Management",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",

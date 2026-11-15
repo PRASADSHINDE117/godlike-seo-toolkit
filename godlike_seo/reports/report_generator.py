@@ -26,6 +26,7 @@ from godlike_seo.models import (
     IssueCategory,
     IssueCluster,
     IssueSeverity,
+    PageType,
     ScoreDeduction,
     SEOIssue,
     SEOReport,
@@ -98,8 +99,8 @@ RULE_CATALOG = [
     {
         "rule_id": "TECH-008",
         "category": IssueCategory.TECHNICAL,
-        "title": "Server Response Latency",
-        "description": "Monitors Time to First Byte (TTFB) and ensures server response times remain under 1000ms.",
+        "title": "HTTP Request Latency / Round-Trip Time",
+        "description": "Monitors HTTP round-trip latency (RTT) via HTTP client and ensures server response times remain under 1000ms (Note: client RTT is a network latency proxy, distinct from in-browser Core Web Vitals such as LCP or INP).",
         "issue_ids": {"SLOW_RESPONSE_TIME"},
     },
     {
@@ -336,6 +337,94 @@ class ReportGenerator:
         pages = crawl_result.pages
         domain = crawl_result.domain or (urlparse(crawl_result.start_url).netloc if crawl_result.start_url else "")
 
+        successful_pages = [p for p in pages if p.status_code > 0]
+        public_html_pages = [
+            p for p in pages 
+            if p.status_code == 200 and p.has_html and getattr(p, "page_type", None) == PageType.PUBLIC_CONTENT
+        ]
+
+        # Guard against empty/failed crawls: score must never be 100 on 0 pages
+        if not pages or not successful_pages:
+            ledger: List[CheckResult] = []
+            for rule in RULE_CATALOG:
+                ledger.append(CheckResult(
+                    rule_id=rule["rule_id"],
+                    rule_version="3.3",
+                    category=rule["category"],
+                    status=CheckStatus.SKIPPED,
+                    title=rule["title"],
+                    description="Audit skipped: no accessible HTTP responses obtained from host.",
+                    evidence="0 accessible pages crawled.",
+                    affected_count=0,
+                    affected_urls=[],
+                ))
+            cat_scores: Dict[str, CategoryScore] = {}
+            for key, name, cat, weight in [
+                ("technical", "Technical & Crawlability", IssueCategory.TECHNICAL, 0.15),
+                ("on_page", "On-Page & Metadata", IssueCategory.ON_PAGE, 0.15),
+                ("social", "Social & Open Graph", IssueCategory.SOCIAL, 0.15),
+                ("content", "Content & Topical Depth", IssueCategory.CONTENT, 0.15),
+                ("internal_linking", "Site Architecture & Links", IssueCategory.INTERNAL_LINKING, 0.15),
+                ("performance", "Performance & Experience", IssueCategory.PERFORMANCE, 0.10),
+                ("structured_data", "Structured Data & Schema", IssueCategory.STRUCTURED_DATA, 0.05),
+                ("mobile", "Mobile & Responsive", IssueCategory.MOBILE, 0.05),
+                ("security", "Security & Standards", IssueCategory.SECURITY, 0.05),
+            ]:
+                cat_results = [r for r in ledger if r.category == cat]
+                cat_scores[key] = CategoryScore(
+                    name=name,
+                    score=0.0,
+                    weight=weight,
+                    tests_evaluated=0,
+                    tests_passed=0,
+                    tests_skipped=len(cat_results),
+                    tests_not_applicable=0,
+                    deductions=[],
+                    check_results=cat_results,
+                    status="INCONCLUSIVE",
+                )
+            summary_stats = {
+                "total_pages_crawled": len(pages),
+                "pages_discovered_count": getattr(crawl_result, "pages_discovered_count", len(pages)),
+                "crawl_coverage_pct": getattr(crawl_result, "crawl_coverage_pct", 0.0),
+                "total_tests_evaluated": 0,
+                "total_tests_passed": 0,
+                "total_tests_not_applicable": 0,
+                "total_tests_skipped": len(RULE_CATALOG),
+                "unique_issue_clusters": 0,
+                "total_raw_occurrences": 0,
+                "critical_clusters_count": 0,
+                "high_clusters_count": 0,
+                "medium_clusters_count": 0,
+                "low_clusters_count": 0,
+                "info_clusters_count": 0,
+                "orphaned_pages_count": 0,
+                "average_response_time_ms": 0,
+                "average_latency_rtt_ms": 0,
+                "average_word_count": 0,
+                "audit_status": "INCONCLUSIVE",
+                "environment_intent": "unknown",
+            }
+            return SEOReport(
+                url=crawl_result.start_url,
+                domain=domain,
+                overall_score=0.0,
+                category_scores=cat_scores,
+                all_deductions=[],
+                audit_status="INCONCLUSIVE",
+                status_message="Crawl yielded 0 accessible responses. Audit is inconclusive due to lack of crawl data.",
+                environment_intent="unknown",
+                check_ledger=ledger,
+                issue_clusters=[],
+                raw_issues=[],
+                recommendations=["Check network connectivity, host DNS, or server firewall permissions to enable crawling."],
+                summary_stats=summary_stats,
+                crawl_result=crawl_result,
+                competitor_analyses=competitor_analyses or [],
+                competitor_analysis=competitor_analyses[0] if competitor_analyses else None,
+                serp_analyses=serp_analyses or [],
+            )
+
         # Resolve environment intent
         env_intent = environment or getattr(crawl_result, "environment", None) or self.environment or "unknown"
         if env_intent == "unknown" or not env_intent:
@@ -348,13 +437,12 @@ class ReportGenerator:
                     if any(term in h_str for term in ("candidate", "staging", "development", "preview", "tental_staging")):
                         env_intent = "staging"
                         break
-                if env_intent == "unknown" or not env_intent:
-                    env_intent = "production"
+                # If still unconfirmed, preserve "unknown" rather than arbitrarily guessing production
 
         # Update detector environment if needed
         self.issue_detector.environment = env_intent
 
-        logger.info("Generating Evidence-Based SEO Report 3.1 for: %s (%d pages, env: %s)", domain, len(pages), env_intent)
+        logger.info("Generating Evidence-Based SEO Report 3.3 for: %s (%d pages, env: %s)", domain, len(pages), env_intent)
 
         # 1. Run Link Analysis first to populate inlinks_count and internal PageRank
         link_audit = self.link_analyzer.analyze(pages)
@@ -396,7 +484,7 @@ class ReportGenerator:
                 total_aff = list(dict.fromkeys([u for mc in matched_clusters for u in mc.affected_urls]))
                 ledger.append(CheckResult(
                     rule_id=r_id,
-                    rule_version="3.1",
+                    rule_version="3.3",
                     category=cat,
                     status=CheckStatus.FAIL,
                     title=r_title,
@@ -410,7 +498,7 @@ class ReportGenerator:
                 if r_id == "LINK-001" and eligible_indexable_count == 0:
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.1",
+                        rule_version="3.3",
                         category=cat,
                         status=CheckStatus.NOT_APPLICABLE,
                         title=r_title,
@@ -419,10 +507,22 @@ class ReportGenerator:
                         affected_count=0,
                         affected_urls=[],
                     ))
+                elif len(public_html_pages) == 0 and cat in (IssueCategory.ON_PAGE, IssueCategory.CONTENT, IssueCategory.STRUCTURED_DATA, IssueCategory.MOBILE):
+                    ledger.append(CheckResult(
+                        rule_id=r_id,
+                        rule_version="3.3",
+                        category=cat,
+                        status=CheckStatus.NOT_APPLICABLE,
+                        title=r_title,
+                        description="Not applicable: 0 public HTML content pages were crawled (e.g. non-HTML endpoints or sitewide private routes).",
+                        evidence="Check requires at least one public HTML content page to evaluate.",
+                        affected_count=0,
+                        affected_urls=[],
+                    ))
                 else:
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.1",
+                        rule_version="3.3",
                         category=cat,
                         status=CheckStatus.PASS,
                         title=r_title,
@@ -519,14 +619,29 @@ class ReportGenerator:
         critical_clusters = [c for c in clusters if c.severity == IssueSeverity.CRITICAL]
         high_clusters = [c for c in clusters if c.severity == IssueSeverity.HIGH]
 
-        if has_sitewide_noindex and env_intent != "staging":
-            audit_status = "INDEXATION_BLOCKED"
-            status_message = (
-                "CRITICAL RELEASE BLOCKER: Sitewide 'noindex' directive detected across public pages on production host. "
-                "Search engines cannot index this website. SEO Master Score capped at 0/100 (Indexation Blocked)."
-            )
-            overall_score = 0.0
-        elif has_staging_noindex or (has_sitewide_noindex and env_intent == "staging"):
+        if has_sitewide_noindex:
+            if env_intent == "production":
+                audit_status = "INDEXATION_BLOCKED"
+                status_message = (
+                    "CRITICAL RELEASE BLOCKER: Sitewide 'noindex' directive detected across public pages on production host. "
+                    "Search engines cannot index this website. SEO Master Score capped at 0/100 (Indexation Blocked)."
+                )
+                overall_score = 0.0
+            elif env_intent == "staging":
+                audit_status = "STAGING_PROTECTED"
+                status_message = (
+                    "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
+                    "from search engine indexing."
+                )
+            else:
+                audit_status = "INDEXATION_WARNING"
+                status_message = (
+                    "ENVIRONMENT UNCONFIRMED: Sitewide 'noindex' directive detected across all crawled pages. "
+                    "If this is a staging/testing environment, this directive is appropriate. "
+                    "If intended for production, this is a critical blocker that prevents search engine indexing."
+                )
+                overall_score = min(overall_score, 49.0)
+        elif has_staging_noindex:
             audit_status = "STAGING_PROTECTED"
             status_message = (
                 "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
@@ -569,9 +684,12 @@ class ReportGenerator:
 
         summary_stats = {
             "total_pages_crawled": len(pages),
+            "pages_discovered_count": getattr(crawl_result, "pages_discovered_count", len(pages)),
+            "crawl_coverage_pct": getattr(crawl_result, "crawl_coverage_pct", 100.0),
             "total_tests_evaluated": sum(cs.tests_evaluated for cs in category_scores.values()),
             "total_tests_passed": sum(cs.tests_passed for cs in category_scores.values()),
             "total_tests_not_applicable": sum(cs.tests_not_applicable for cs in category_scores.values()),
+            "total_tests_skipped": sum(cs.tests_skipped for cs in category_scores.values()),
             "unique_issue_clusters": len(clusters),
             "total_raw_occurrences": len(raw_issues),
             "critical_clusters_count": len([c for c in clusters if c.severity == IssueSeverity.CRITICAL]),
@@ -581,6 +699,7 @@ class ReportGenerator:
             "info_clusters_count": len([c for c in clusters if c.severity == IssueSeverity.INFORMATIONAL]),
             "orphaned_pages_count": len(crawl_result.orphaned_pages),
             "average_response_time_ms": tech_audit.get("average_response_time_ms", 0),
+            "average_latency_rtt_ms": tech_audit.get("average_response_time_ms", 0),
             "average_word_count": content_audit.get("average_word_count", 0),
             "audit_status": audit_status,
             "environment_intent": env_intent,

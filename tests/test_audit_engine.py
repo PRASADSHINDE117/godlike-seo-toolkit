@@ -164,10 +164,11 @@ class TestSEOAuditEngine(unittest.TestCase):
         issues = self.detector.analyze([page])
         rel_canon = [i for i in issues if i.issue_id == "RELATIVE_CANONICAL_URL"]
         self.assertEqual(len(rel_canon), 1)
-        self.assertEqual(rel_canon[0].severity, IssueSeverity.HIGH)
+        self.assertEqual(rel_canon[0].severity, IssueSeverity.LOW)
 
-    # Scenario 7: Sitewide X-Robots-Tag noindex triggers CRITICAL issue
+    # Scenario 7: Sitewide X-Robots-Tag noindex triggers CRITICAL issue on production
     def test_scenario_7_sitewide_noindex_critical(self):
+        self.detector.environment = "production"
         pages = [
             PageData(
                 url=f"https://example.com/page-{i}",
@@ -878,6 +879,70 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertGreaterEqual(len(overlap_issues), 1)
         self.assertEqual(overlap_issues[0].severity, IssueSeverity.INFORMATIONAL)
         self.assertIn("Google Search Console", overlap_issues[0].observation)
+
+    # Scenario 30: Empty/Failed Crawl yields INCONCLUSIVE, 0 score, and SKIPPED ledger
+    def test_scenario_30_empty_crawl_truthful_scoring(self):
+        failed_crawl = CrawlResult(
+            start_url="https://unreachable-host.xyz/",
+            domain="unreachable-host.xyz",
+            pages=[],
+            pages_discovered_count=0,
+            crawl_coverage_pct=0.0,
+        )
+        report = self.report_gen.generate_report(failed_crawl)
+        self.assertEqual(report.audit_status, "INCONCLUSIVE")
+        self.assertEqual(report.overall_score, 0.0)
+        self.assertIn("inconclusive", report.status_message.lower())
+        # All checks must be SKIPPED, none should falsely PASS
+        passed_checks = [c for c in report.check_ledger if c.status == CheckStatus.PASS]
+        self.assertEqual(len(passed_checks), 0)
+        skipped_checks = [c for c in report.check_ledger if c.status == CheckStatus.SKIPPED]
+        self.assertGreaterEqual(len(skipped_checks), 25)
+
+    # Scenario 31: Sitewide Noindex on Unconfirmed Host triggers INDEXATION_WARNING
+    def test_scenario_31_unconfirmed_environment_noindex_warning(self):
+        pages = [
+            PageData(
+                url=f"https://unconfirmed-custom-subdomain.org/p-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                x_robots_tag="noindex, nofollow",
+                is_indexable=False,
+                word_count=200,
+            )
+            for i in range(5)
+        ]
+        crawl = CrawlResult(start_url="https://unconfirmed-custom-subdomain.org/", pages=pages, environment=None)
+        report = self.report_gen.generate_report(crawl, environment=None)
+        self.assertEqual(report.environment_intent, "unknown")
+        self.assertEqual(report.audit_status, "INDEXATION_WARNING")
+        self.assertLessEqual(report.overall_score, 49.0)
+        self.assertIn("ENVIRONMENT UNCONFIRMED", report.status_message)
+
+    # Scenario 32: Web App SSRF Defense
+    def test_scenario_32_web_app_ssrf_protection(self):
+        from godlike_seo.web.app import is_safe_target_url
+        # Localhost & Loopback
+        safe, _ = is_safe_target_url("http://localhost:8000")
+        self.assertFalse(safe)
+        safe, _ = is_safe_target_url("http://127.0.0.1:5000/admin")
+        self.assertFalse(safe)
+        # Private RFC 1918
+        safe, _ = is_safe_target_url("http://192.168.1.1/router")
+        self.assertFalse(safe)
+        safe, _ = is_safe_target_url("http://10.0.0.5/internal")
+        self.assertFalse(safe)
+        # Cloud Metadata
+        safe, _ = is_safe_target_url("http://169.254.169.254/latest/meta-data/")
+        self.assertFalse(safe)
+        safe, _ = is_safe_target_url("http://metadata.google.internal/computeMetadata/v1/")
+        self.assertFalse(safe)
+        # Invalid schemes
+        safe, _ = is_safe_target_url("file:///etc/passwd")
+        self.assertFalse(safe)
+        safe, _ = is_safe_target_url("ftp://ftp.example.com")
+        self.assertFalse(safe)
 
 
 if __name__ == "__main__":

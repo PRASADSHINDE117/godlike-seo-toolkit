@@ -30,30 +30,33 @@ class PageType(str, Enum):
     ERROR = "error"
 
 
-# Regex patterns identifying interactive user application workflows
+# Segment-aware regex patterns identifying interactive user application workflows
+# Uses segment boundaries to prevent false positives like /user-guide/, /accounting/, /new-arrivals/
 APP_ROUTE_PATTERNS = re.compile(
-    r"/(my-|user|account|profile|settings|dashboard|admin|portal|"
-    r"bookings|orders|wishlist|create-|new-|edit-|manage-|cart|checkout|"
-    r"billing|payment|inbox|messages|notifications)",
+    r"/(?:my-[a-z0-9_-]+|create-listing|edit-listing|manage-listing|"
+    r"account|profile|settings|dashboard|admin|portal|"
+    r"bookings|orders|wishlist|cart|checkout|"
+    r"billing|payment|inbox|messages|notifications)(?:/|$|\?)",
     re.I,
 )
 
-# Regex patterns identifying authentication entry points
+# Segment-aware regex patterns identifying authentication entry points
+# Uses segment boundaries so /author/ or /author-bio/ are never treated as auth gates
 AUTH_ROUTE_PATTERNS = re.compile(
-    r"/(login|signin|sign-in|log-in|signup|sign-up|register|registration|"
-    r"auth|authenticate|password|forgot-password|reset-password|logout)",
+    r"/(?:login|signin|sign-in|log-in|signup|sign-up|register|registration|"
+    r"auth|authenticate|password|forgot-password|reset-password|logout)(?:/|$|\?)",
     re.I,
 )
 
-# Regex patterns identifying system utilities and dynamic feeds
+# Segment-aware regex patterns identifying system utilities and dynamic feeds
 UTILITY_PATTERNS = re.compile(
-    r"/(api/|graphql|feed|rss|search\?|filter\?|export|download)",
+    r"/(?:api|graphql|feed|rss)(?:/|$|\?)|/(?:search|filter)(?:\?|$)",
     re.I,
 )
 
 
 class PageClassifier:
-    """Classifies URLs and DOM responses to prevent false-positive audits on app routes."""
+    """Classifies URLs and DOM responses with segment-aware precision and custom overrides."""
 
     @staticmethod
     def classify(
@@ -61,13 +64,25 @@ class PageClassifier:
         status_code: int = 200,
         html: str = "",
         headers: Optional[Dict[str, str]] = None,
+        route_overrides: Optional[Dict[str, PageType]] = None,
     ) -> Dict[str, Any]:
-        """Classify page and detect soft login gateways."""
+        """Classify page and detect soft login gateways with segment awareness."""
         headers = headers or {}
         parsed = urlparse(url)
         path = parsed.path.lower()
         query = parsed.query.lower()
         full_path = f"{path}?{query}" if query else path
+
+        # 0. User / Project Explicit Route Overrides
+        if route_overrides:
+            for pattern, target_type in route_overrides.items():
+                if pattern.lower() in full_path or pattern.lower() == path:
+                    return {
+                        "page_type": target_type,
+                        "is_app_route": target_type in (PageType.USER_APP_ROUTE, PageType.AUTHENTICATION),
+                        "is_auth_gate": target_type == PageType.AUTHENTICATION,
+                        "reason": f"Explicit route override matched: '{pattern}'",
+                    }
 
         # 1. HTTP Status checks
         if status_code in (301, 302, 303, 307, 308):

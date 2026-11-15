@@ -58,7 +58,8 @@ class HTMLReportGenerator:
         unique_clusters = stats.get("unique_issue_clusters", len(report.issue_clusters))
         raw_occurrences = stats.get("total_raw_occurrences", len(report.raw_issues))
         critical_clusters = stats.get("critical_clusters_count", 0)
-        avg_ttfb = stats.get("average_response_time_ms", 0)
+        avg_latency = stats.get("average_latency_rtt_ms") or stats.get("average_response_time_ms", 0)
+        coverage_pct = stats.get("crawl_coverage_pct", 100.0)
 
         crawl_config = report.crawl_result
         crawl_time = crawl_config.started_at[:19].replace("T", " ") if crawl_config else report.generated_at[:19].replace("T", " ")
@@ -297,7 +298,7 @@ class HTMLReportGenerator:
                             <th>Word Count</th>
                             <th>H1 Header</th>
                             <th>Schema</th>
-                            <th>Speed (TTFB)</th>
+                            <th>Speed (HTTP RTT)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -307,7 +308,7 @@ class HTMLReportGenerator:
                             <td>{stats.get('average_word_count', 0)}</td>
                             <td>{html.escape(comp_analysis.keyword if comp_analysis.your_position else 'Target Page')}</td>
                             <td>{'Yes' if stats.get('has_schema') else 'No'}</td>
-                            <td>{avg_ttfb:.0f}ms</td>
+                            <td>{avg_latency:.0f}ms</td>
                         </tr>
             """
             for c in comp_analysis.competitors:
@@ -532,7 +533,7 @@ class HTMLReportGenerator:
 
         <!-- Crawl Configuration Metadata -->
         <div class="config-bar">
-            <div><strong>Crawl Scope:</strong> {pages_count} Pages Evaluated</div>
+            <div><strong>Crawl Scope:</strong> {pages_count} Pages Evaluated ({coverage_pct:.0f}% Coverage)</div>
             <div><strong>Rendering:</strong> {js_status}</div>
             <div><strong>Timestamp:</strong> {crawl_time} UTC</div>
             <div><strong>Engine Confidence:</strong> High (Deterministic DOM Validation)</div>
@@ -553,8 +554,8 @@ class HTMLReportGenerator:
                 <div class="stat-label">Raw Occurrences</div>
             </div>
             <div class="stat-box">
-                <div class="stat-val">{avg_ttfb:.0f} ms</div>
-                <div class="stat-label">Avg TTFB Proxy</div>
+                <div class="stat-val">{avg_latency:.0f} ms</div>
+                <div class="stat-label">Avg HTTP RTT (Client Proxy)</div>
             </div>
         </div>
 

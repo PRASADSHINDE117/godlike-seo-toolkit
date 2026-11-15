@@ -114,6 +114,14 @@ class SEOCrawler:
         self._target_domain: str = ""
         self._root_url: str = ""
         self._start_time: float = 0.0
+        self._robots_sitemaps: List[str] = []
+        self._crawl_lock = asyncio.Lock()
+        self._host_lock = asyncio.Lock()
+        self._last_host_request_time: float = 0.0
+        self._reserved_pages: int = 0
+        self._pw_playwright = None
+        self._pw_browser = None
+        self._pw_context = None
 
     def _get_user_agent(self) -> str:
         """Return a stable, consistent User-Agent across all audit requests and robots checks."""
@@ -161,9 +169,10 @@ class SEOCrawler:
         return True
 
     async def _fetch_robots_txt(self, session: aiohttp.ClientSession, base_url: str) -> None:
-        """Fetch and parse robots.txt for the domain."""
+        """Fetch and parse robots.txt for the domain and extract sitemaps."""
         parsed = urlparse(base_url)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        self._robots_sitemaps = []
         try:
             async with session.get(robots_url, timeout=self.config.timeout_seconds) as resp:
                 if resp.status == 200:
@@ -171,18 +180,29 @@ class SEOCrawler:
                     parser = urllib.robotparser.RobotFileParser()
                     parser.parse(text.splitlines())
                     self._robots_parser = parser
-                    logger.info("Parsed robots.txt from %s", robots_url)
+                    # Parse sitemap directives declared in robots.txt
+                    for line in text.splitlines():
+                        clean_line = line.strip()
+                        if clean_line.lower().startswith("sitemap:"):
+                            parts = clean_line.split(":", 1)
+                            if len(parts) > 1:
+                                sm = parts[1].strip()
+                                if sm.startswith(("http://", "https://")) and sm not in self._robots_sitemaps:
+                                    self._robots_sitemaps.append(sm)
+                    logger.info("Parsed robots.txt from %s (Discovered %d sitemaps)", robots_url, len(self._robots_sitemaps))
         except Exception as e:
             logger.debug("Could not fetch robots.txt: %s", e)
 
     async def _discover_sitemaps(self, session: aiohttp.ClientSession, base_url: str) -> List[str]:
-        """Discover and parse XML sitemaps."""
+        """Discover and parse XML sitemaps, prioritizing sitemaps declared in robots.txt."""
         parsed = urlparse(base_url)
-        sitemap_candidates = [
+        sitemap_candidates = list(self._robots_sitemaps) + [
             f"{parsed.scheme}://{parsed.netloc}/sitemap.xml",
             f"{parsed.scheme}://{parsed.netloc}/sitemap_index.xml",
             f"{parsed.scheme}://{parsed.netloc}/sitemap/sitemap.xml",
         ]
+        # Deduplicate while preserving order
+        sitemap_candidates = list(dict.fromkeys(sitemap_candidates))
 
         discovered_urls: Set[str] = set()
 
@@ -247,6 +267,7 @@ class SEOCrawler:
         depth: int,
         rendered_dom: Optional[str] = None,
         render_status: str = "static_http",
+        raw_source_html: Optional[str] = None,
     ) -> Tuple[PageData, List[str]]:
         """Extract rich SEO data and raw DOM evidence."""
         try:
@@ -728,38 +749,72 @@ class SEOCrawler:
             x_robots_tag=x_robots,
             is_self_canonical=is_self_canonical,
             rendered_dom=rendered_dom,
+            raw_source_html=raw_source_html,
             render_status=render_status,
             found_in_sitemap=(norm_final in self._sitemap_urls),
         )
 
         return page_data, discovered_urls
 
-    async def _render_page_playwright(self, url: str) -> Optional[Tuple[str, str]]:
-        """Render page using Playwright headless Chromium for dynamic/client-rendered content."""
+    async def _init_playwright(self) -> None:
+        """Initialize reusable Playwright browser and context for JS rendering."""
         try:
             from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent=self._user_agent,
-                    ignore_https_errors=not self.config.verify_ssl,
-                )
-                if self._auth_cookies:
-                    pw_cookies = [{"name": k, "value": v, "url": url} for k, v in self._auth_cookies.items()]
-                    try:
-                        await context.add_cookies(pw_cookies)
-                    except Exception:
-                        pass
-                page = await context.new_page()
-                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(0.8)
-                rendered_html = await page.content()
-                final_url = page.url
-                await browser.close()
-                return rendered_html, final_url
+            self._pw_playwright = await async_playwright().start()
+            self._pw_browser = await self._pw_playwright.chromium.launch(headless=True)
+            self._pw_context = await self._pw_browser.new_context(
+                user_agent=self._get_user_agent(),
+                ignore_https_errors=not self.config.verify_ssl,
+            )
+            if self._auth_cookies:
+                pw_cookies = [{"name": k, "value": v, "url": self._root_url} for k, v in self._auth_cookies.items()]
+                try:
+                    await self._pw_context.add_cookies(pw_cookies)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("Could not initialize Playwright: %s", e)
+            self._pw_playwright = None
+            self._pw_browser = None
+            self._pw_context = None
+
+    async def _close_playwright(self) -> None:
+        """Cleanly tear down Playwright instances."""
+        try:
+            if self._pw_context:
+                await self._pw_context.close()
+            if self._pw_browser:
+                await self._pw_browser.close()
+            if self._pw_playwright:
+                await self._pw_playwright.stop()
+        except Exception as e:
+            logger.debug("Error closing Playwright: %s", e)
+        finally:
+            self._pw_context = None
+            self._pw_browser = None
+            self._pw_playwright = None
+
+    async def _render_page_playwright(self, url: str) -> Optional[Tuple[str, str]]:
+        """Render page using the shared Playwright context for dynamic/client-rendered content."""
+        if not self._pw_context:
+            return None
+        page = None
+        try:
+            page = await self._pw_context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            await asyncio.sleep(0.8)
+            rendered_html = await page.content()
+            final_url = page.url
+            return rendered_html, final_url
         except Exception as e:
             logger.debug("Playwright rendering skipped/failed for %s: %s", url, e)
             return None
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def _crawl_url_http(
         self,
@@ -775,83 +830,103 @@ class SEOCrawler:
         if self._auth_headers:
             headers.update(self._auth_headers)
 
-        redirect_chain: List[RedirectHop] = []
-        t0 = time.perf_counter()
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            redirect_chain: List[RedirectHop] = []
+            t0 = time.perf_counter()
 
-        try:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout_seconds),
-                proxy=self.config.proxy,
-                ssl=self.config.verify_ssl,
-                allow_redirects=True,
-            ) as resp:
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            try:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=self.config.timeout_seconds),
+                    proxy=self.config.proxy,
+                    ssl=self.config.verify_ssl,
+                    allow_redirects=True,
+                ) as resp:
+                    if resp.status in (429, 503) and attempt < max_retries:
+                        retry_after_hdr = resp.headers.get("retry-after")
+                        backoff = 1.0 * (2 ** attempt)
+                        if retry_after_hdr and retry_after_hdr.isdigit():
+                            backoff = min(float(retry_after_hdr), 10.0)
+                        logger.warning("HTTP %d for %s. Retrying in %.1fs (attempt %d/%d)", resp.status, url, backoff, attempt + 1, max_retries)
+                        await asyncio.sleep(backoff)
+                        continue
 
-                for hist in resp.history:
-                    redirect_chain.append(RedirectHop(url=normalize_url(str(hist.url)), status_code=hist.status))
+                    elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
-                final_url = normalize_url(str(resp.url))
-                resp_headers = {k.lower(): v for k, v in resp.headers.items()}
-                content_type = resp_headers.get("content-type", "")
+                    for hist in resp.history:
+                        redirect_chain.append(RedirectHop(url=normalize_url(str(hist.url)), status_code=hist.status))
 
-                if "text/html" not in content_type and "application/xhtml" not in content_type:
-                    classification = PageClassifier.classify(url=final_url, status_code=resp.status, headers=resp_headers)
-                    x_robots = resp_headers.get("x-robots-tag", "").strip()
-                    is_indexable = resp.status < 400 and "noindex" not in x_robots.lower()
-                    indexability_reason = f"Non-HTML Content ({content_type})" if is_indexable else f"Blocked by HTTP {resp.status} status"
-                    page = PageData(
-                        url=normalize_url(url),
+                    final_url = normalize_url(str(resp.url))
+                    resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                    content_type = resp_headers.get("content-type", "")
+
+                    if "text/html" not in content_type and "application/xhtml" not in content_type:
+                        classification = PageClassifier.classify(url=final_url, status_code=resp.status, headers=resp_headers)
+                        x_robots = resp_headers.get("x-robots-tag", "").strip()
+                        is_indexable = resp.status < 400 and "noindex" not in x_robots.lower()
+                        indexability_reason = f"Non-HTML Content ({content_type})" if is_indexable else f"Blocked by HTTP {resp.status} status"
+                        page = PageData(
+                            url=normalize_url(url),
+                            final_url=final_url,
+                            status_code=resp.status,
+                            content_type=content_type,
+                            content_length=int(resp_headers.get("content-length", 0)),
+                            response_time_ms=elapsed_ms,
+                            http_headers=resp_headers,
+                            headers=resp_headers,
+                            redirect_chain=redirect_chain,
+                            crawl_depth=depth,
+                            has_html=False,
+                            page_type=classification["page_type"],
+                            is_auth_gate=classification["is_auth_gate"],
+                            page_type_reason=classification["reason"],
+                            is_indexable=is_indexable,
+                            indexability_reason=indexability_reason,
+                            x_robots_tag=x_robots,
+                        )
+                        return page, []
+
+                    html = await resp.text(errors="replace")
+                    raw_source_html = html
+
+                    render_status = "static_http"
+                    rendered_dom = None
+                    if self.config.render_js and resp.status == 200:
+                        pw_result = await self._render_page_playwright(url)
+                        if pw_result:
+                            rendered_dom, pw_final = pw_result
+                            html = rendered_dom
+                            if pw_final:
+                                final_url = pw_final
+                            render_status = "rendered_playwright"
+
+                    return self._extract_page_data(
+                        url=url,
                         final_url=final_url,
                         status_code=resp.status,
-                        content_type=content_type,
-                        content_length=int(resp_headers.get("content-length", 0)),
-                        response_time_ms=elapsed_ms,
-                        http_headers=resp_headers,
                         headers=resp_headers,
+                        html=html,
+                        response_time_ms=elapsed_ms,
                         redirect_chain=redirect_chain,
-                        crawl_depth=depth,
-                        has_html=False,
-                        page_type=classification["page_type"],
-                        is_auth_gate=classification["is_auth_gate"],
-                        page_type_reason=classification["reason"],
-                        is_indexable=is_indexable,
-                        indexability_reason=indexability_reason,
-                        x_robots_tag=x_robots,
+                        depth=depth,
+                        rendered_dom=rendered_dom,
+                        render_status=render_status,
+                        raw_source_html=raw_source_html,
                     )
-                    return page, []
 
-                html = await resp.text(errors="replace")
-
-                render_status = "static_http"
-                rendered_dom = None
-                if self.config.render_js and resp.status == 200:
-                    pw_result = await self._render_page_playwright(url)
-                    if pw_result:
-                        rendered_dom, pw_final = pw_result
-                        html = rendered_dom
-                        if pw_final:
-                            final_url = pw_final
-                        render_status = "rendered_playwright"
-
-                return self._extract_page_data(
-                    url=url,
-                    final_url=final_url,
-                    status_code=resp.status,
-                    headers=resp_headers,
-                    html=html,
-                    response_time_ms=elapsed_ms,
-                    redirect_chain=redirect_chain,
-                    depth=depth,
-                    rendered_dom=rendered_dom,
-                    render_status=render_status,
-                )
-
-        except asyncio.TimeoutError:
-            return PageData(url=normalize_url(url), status_code=0, error="Request timed out", crawl_depth=depth, has_html=False, page_type=PageType.ERROR, is_indexable=False, indexability_reason="Request timed out"), []
-        except Exception as e:
-            return PageData(url=normalize_url(url), status_code=0, error=str(e), crawl_depth=depth, has_html=False, page_type=PageType.ERROR, is_indexable=False, indexability_reason=f"Connection Error: {e}"), []
+            except asyncio.TimeoutError:
+                if attempt < max_retries:
+                    await asyncio.sleep(1.0)
+                    continue
+                return PageData(url=normalize_url(url), status_code=0, error="Request timed out", crawl_depth=depth, has_html=False, page_type=PageType.ERROR, is_indexable=False, indexability_reason="Request timed out"), []
+            except Exception as e:
+                if attempt < max_retries and "Cannot connect" in str(e):
+                    await asyncio.sleep(1.0)
+                    continue
+                return PageData(url=normalize_url(url), status_code=0, error=str(e), crawl_depth=depth, has_html=False, page_type=PageType.ERROR, is_indexable=False, indexability_reason=f"Connection Error: {e}"), []
+        return None
 
     async def crawl(self, start_url: str) -> CrawlResult:
         """Run the comprehensive crawl against the given root URL."""
@@ -884,74 +959,104 @@ class SEOCrawler:
             connector = aiohttp.TCPConnector(ssl=ssl_ctx, limit=self.config.concurrency)
         else:
             connector = aiohttp.TCPConnector(ssl=False, limit=self.config.concurrency)
-        async with aiohttp.ClientSession(connector=connector, cookies=self._auth_cookies or None) as session:
-            if self.config.respect_robots_txt:
-                await self._fetch_robots_txt(session, self._root_url)
+        if self.config.render_js:
+            await self._init_playwright()
 
-            if self.config.parse_sitemap:
-                sitemap_list = await self._discover_sitemaps(session, self._root_url)
-                self._sitemap_urls = set(sitemap_list)
-                result.sitemap_urls = sitemap_list
+        try:
+            async with aiohttp.ClientSession(connector=connector, cookies=self._auth_cookies or None) as session:
+                if self.config.respect_robots_txt:
+                    await self._fetch_robots_txt(session, self._root_url)
 
-            await self._queue.put((self._root_url, 0))
-            self._visited_urls.add(self._root_url)
+                if self.config.parse_sitemap:
+                    sitemap_list = await self._discover_sitemaps(session, self._root_url)
+                    self._sitemap_urls = set(sitemap_list)
+                    result.sitemap_urls = sitemap_list
 
-            semaphore = asyncio.Semaphore(self.config.concurrency)
+                await self._queue.put((self._root_url, 0))
+                self._visited_urls.add(self._root_url)
 
-            async def worker():
-                while True:
+                semaphore = asyncio.Semaphore(self.config.concurrency)
+
+                async def worker():
+                    while True:
+                        try:
+                            url, depth = await self._queue.get()
+                        except asyncio.CancelledError:
+                            break
+
+                        # Atomic reservation of crawl page slot
+                        async with self._crawl_lock:
+                            if len(self._crawled_pages) + self._reserved_pages >= self.config.max_pages:
+                                self._queue.task_done()
+                                continue
+                            self._reserved_pages += 1
+
+                        try:
+                            async with semaphore:
+                                if self.config.rate_limit_delay > 0:
+                                    async with self._host_lock:
+                                        now = time.perf_counter()
+                                        time_since_last = now - self._last_host_request_time
+                                        if time_since_last < self.config.rate_limit_delay:
+                                            await asyncio.sleep(self.config.rate_limit_delay - time_since_last)
+                                        self._last_host_request_time = time.perf_counter()
+
+                                crawl_res = await self._crawl_url_http(session, url, depth)
+
+                                if crawl_res:
+                                    page_data, newly_discovered = crawl_res
+                                    async with self._crawl_lock:
+                                        self._crawled_pages.append(page_data)
+
+                                    if self.progress_callback:
+                                        self.progress_callback({
+                                            "status": "crawling",
+                                            "url": url,
+                                            "status_code": page_data.status_code,
+                                            "total_crawled": len(self._crawled_pages),
+                                            "queue_size": self._queue.qsize(),
+                                        })
+
+                                    if depth < self.config.max_depth:
+                                        for next_url in newly_discovered:
+                                            norm_next = normalize_url(next_url)
+                                            async with self._crawl_lock:
+                                                can_add = (
+                                                    norm_next not in self._visited_urls
+                                                    and len(self._visited_urls) < self.config.max_pages * 2
+                                                    and self._is_same_domain(norm_next)
+                                                    and self._is_crawlable_url(norm_next)
+                                                )
+                                                if can_add:
+                                                    self._visited_urls.add(norm_next)
+                                                    await self._queue.put((norm_next, depth + 1))
+                        finally:
+                            async with self._crawl_lock:
+                                self._reserved_pages -= 1
+                            self._queue.task_done()
+
+                tasks = [asyncio.create_task(worker()) for _ in range(self.config.concurrency)]
+
+                while not self._queue.empty():
+                    async with self._crawl_lock:
+                        if len(self._crawled_pages) >= self.config.max_pages:
+                            break
+                    await asyncio.sleep(0.1)
+
+                # Drain remaining items in queue if max_pages reached
+                while not self._queue.empty():
                     try:
-                        url, depth = await self._queue.get()
-                    except asyncio.CancelledError:
+                        self._queue.get_nowait()
+                        self._queue.task_done()
+                    except (asyncio.QueueEmpty, ValueError):
                         break
 
-                    if len(self._crawled_pages) >= self.config.max_pages:
-                        self._queue.task_done()
-                        continue
-
-                    async with semaphore:
-                        if self.config.rate_limit_delay > 0:
-                            await asyncio.sleep(self.config.rate_limit_delay)
-
-                        crawl_res = await self._crawl_url_http(session, url, depth)
-
-                        if crawl_res:
-                            page_data, newly_discovered = crawl_res
-                            self._crawled_pages.append(page_data)
-
-                            if self.progress_callback:
-                                self.progress_callback({
-                                    "status": "crawling",
-                                    "url": url,
-                                    "status_code": page_data.status_code,
-                                    "total_crawled": len(self._crawled_pages),
-                                    "queue_size": self._queue.qsize(),
-                                })
-
-                            if depth < self.config.max_depth:
-                                for next_url in newly_discovered:
-                                    norm_next = normalize_url(next_url)
-                                    if (
-                                        norm_next not in self._visited_urls
-                                        and len(self._visited_urls) < self.config.max_pages * 2
-                                        and self._is_same_domain(norm_next)
-                                        and self._is_crawlable_url(norm_next)
-                                    ):
-                                        self._visited_urls.add(norm_next)
-                                        await self._queue.put((norm_next, depth + 1))
-
-                    self._queue.task_done()
-
-            tasks = [asyncio.create_task(worker()) for _ in range(self.config.concurrency)]
-
-            while not self._queue.empty() and len(self._crawled_pages) < self.config.max_pages:
-                await asyncio.sleep(0.3)
-
-            await self._queue.join()
-
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if self.config.render_js:
+                await self._close_playwright()
 
         # Context-Aware Orphan Analysis (Godlike 3.0):
         # Only evaluate verified PUBLIC_CONTENT pages that are indexable HTML 200 OK
@@ -994,10 +1099,15 @@ class SEOCrawler:
         result.crawl_duration_seconds = round(duration, 2)
         result.link_graph = self._link_graph
         result.orphaned_pages = orphaned
-        result.finished_at = datetime.utcnow().isoformat()
+        result.finished_at = datetime.now(timezone.utc).isoformat()
         result.total_internal_links = sum(len(p.internal_links) for p in self._crawled_pages)
         result.total_external_links = sum(len(p.external_links) for p in self._crawled_pages)
         result.total_images = sum(len(p.images) for p in self._crawled_pages)
+        result.pages_discovered_count = len(self._visited_urls)
+        result.crawl_coverage_pct = round(
+            (len(self._crawled_pages) / max(1, len(self._visited_urls))) * 100.0, 1
+        )
+        result.robots_sitemaps = list(self._robots_sitemaps)
 
         logger.info("Crawl 2.0 finished: %d pages, %d orphaned", result.total_pages, len(orphaned))
         return result

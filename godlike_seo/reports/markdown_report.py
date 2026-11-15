@@ -21,7 +21,9 @@ class MarkdownReportGenerator:
         clusters_count = stats.get("unique_issue_clusters", len(report.issue_clusters))
         raw_occurrences = stats.get("total_raw_occurrences", len(report.raw_issues))
         critical_count = stats.get("critical_clusters_count", len(report.critical_clusters))
-        avg_ttfb = stats.get("average_response_time_ms", 0)
+        avg_latency = stats.get("average_latency_rtt_ms") or stats.get("average_response_time_ms", 0)
+        coverage_pct = stats.get("crawl_coverage_pct", 100.0)
+        discovered_count = stats.get("pages_discovered_count", pages_crawled)
 
         lines: List[str] = []
 
@@ -45,10 +47,11 @@ class MarkdownReportGenerator:
         lines.append(f"- **Audit Status:** `{report.audit_status}`")
         lines.append(f"- **Environment Intent:** `{report.environment_intent.upper()}`")
         lines.append(f"- **Evaluated Pages:** `{pages_crawled}`")
+        lines.append(f"- **Crawl Coverage:** `{coverage_pct:.1f}%` ({pages_crawled} crawled / {discovered_count} discovered)")
         lines.append(f"- **Unique Issue Clusters:** `{clusters_count}` ({raw_occurrences} total raw occurrences)")
         lines.append(f"- **Critical Blockers:** `{critical_count}`")
         lines.append(f"- **Orphaned Indexable Pages:** `{orphans_count}`")
-        lines.append(f"- **Avg Server Response Time (TTFB):** `{avg_ttfb:.0f} ms`\n")
+        lines.append(f"- **Avg HTTP Request Latency (RTT):** `{avg_latency:.0f} ms` *(HTTP client latency proxy, not browser Core Web Vitals)*\n")
 
         # 3. Category Breakdown & Transparent Deductions
         lines.append("## 📐 Category Breakdown & Scoring Methodology")
@@ -152,9 +155,9 @@ class MarkdownReportGenerator:
                 lines.append(f"### Benchmark Query: \"{comp.keyword}\"")
                 lines.append(f"- **Your Position:** `#{comp.your_position or 'Unranked (>20)'}`")
                 lines.append(f"- **Competitive Parity Score:** `{comp.competitive_gap_score}/100`")
-                lines.append("\n| Rank | Domain | Word Count | H1 Heading | Schema | Speed (TTFB) |")
+                lines.append("\n| Rank | Domain | Word Count | H1 Heading | Schema | Speed (HTTP RTT) |")
                 lines.append("| :---: | :--- | :---: | :--- | :---: | :---: |")
-                lines.append(f"| **YOU (#{comp.your_position or 'N/A'})** | `{comp.your_url}` | {stats.get('average_word_count', 0)} | Target Page | {'Yes' if stats.get('has_schema') else 'No'} | {avg_ttfb:.0f}ms |")
+                lines.append(f"| **YOU (#{comp.your_position or 'N/A'})** | `{comp.your_url}` | {stats.get('average_word_count', 0)} | Target Page | {'Yes' if stats.get('has_schema') else 'No'} | {avg_latency:.0f}ms |")
                 for c in comp.competitors:
                     h1_clean = c.h1[:35] + ("..." if len(c.h1) > 35 else "") if c.h1 else "None"
                     lines.append(f"| #{c.position} | `{c.domain}` | {c.word_count} | {h1_clean} | {'Yes' if c.has_structured_data else 'No'} | {c.response_time_ms:.0f}ms |")

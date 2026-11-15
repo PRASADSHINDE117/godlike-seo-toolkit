@@ -50,8 +50,14 @@ class CompetitorAnalyzer:
         }
 
         try:
+            try:
+                import certifi
+                verify_target = certifi.where()
+            except Exception:
+                verify_target = True
+
             t0 = time.perf_counter()
-            resp = requests.get(url, headers=headers, timeout=10, verify=False)
+            resp = requests.get(url, headers=headers, timeout=10, verify=verify_target)
             metrics.response_time_ms = round((time.perf_counter() - t0) * 1000, 1)
 
             if resp.status_code == 200:
@@ -159,49 +165,50 @@ class CompetitorAnalyzer:
             avg_comp_headings = sum(c.heading_count for c in competitors) / len(competitors)
             schema_count = sum(1 for c in competitors if c.has_structured_data)
 
-            # 1. Word Count Comparison
+            n_comp = len(competitors)
+            # 1. Word Count Comparison (Advisory Heuristic)
             if your_metrics.word_count < avg_comp_words * 0.75:
-                gap = f"Content Length Gap: Competitors average {avg_comp_words:.0f} words, while you have {your_metrics.word_count} words."
+                gap = f"Content Length Observation (Advisory, n={n_comp}): Competitors average {avg_comp_words:.0f} words, while you have {your_metrics.word_count} words."
                 gaps.append(gap)
                 recommendations.append(
-                    f"Expand content by at least {int(avg_comp_words - your_metrics.word_count)} words. "
-                    "Google rewards comprehensive topical authority for this query."
+                    f"Heuristic Structural Gap Observation (n={n_comp}): Competitor pages average {avg_comp_words:.0f} words vs your {your_metrics.word_count} words. "
+                    "Note: Word count is not a direct Google ranking factor; review whether competitors answer related sub-topics, FAQs, or intent facets that your page omits."
                 )
 
             # 2. Keyword in Title
             if not your_metrics.keyword_in_title:
                 gaps.append(f"Title Optimization Gap: Target keyword '{target_keyword}' missing from your <title> tag.")
                 recommendations.append(
-                    f"Place '{target_keyword}' prominently at the beginning of your <title> tag."
+                    f"Place '{target_keyword}' prominently at the beginning of your <title> tag for topical clarity."
                 )
 
             # 3. Keyword in H1
             if not your_metrics.keyword_in_h1:
                 gaps.append(f"H1 Header Gap: Target keyword '{target_keyword}' is missing from your H1 heading.")
                 recommendations.append(
-                    f"Include '{target_keyword}' directly in your single main H1 heading."
+                    f"Include '{target_keyword}' directly in your single main H1 heading to confirm page subject."
                 )
 
             # 4. Heading structure
             if your_metrics.heading_count < avg_comp_headings * 0.6:
-                gaps.append(f"Content Structure Gap: Competitors use {avg_comp_headings:.1f} subheadings (H2/H3), you have {your_metrics.heading_count}.")
+                gaps.append(f"Content Structure Observation (n={n_comp}): Competitors use {avg_comp_headings:.1f} subheadings (H2/H3) on average, vs {your_metrics.heading_count} on your page.")
                 recommendations.append(
-                    "Break your content into organized sub-topics with clear H2 and H3 subheadings."
+                    "Consider breaking your content into organized sub-topics with descriptive H2 and H3 subheadings for scannability."
                 )
 
             # 5. Schema markup
             if not your_metrics.has_structured_data and schema_count >= 2:
-                gaps.append("Structured Data Gap: Competitors use Schema.org JSON-LD structured data for rich snippets.")
+                gaps.append(f"Structured Data Gap ({schema_count}/{n_comp} competitors): Top competitors provide Schema.org JSON-LD structured data.")
                 recommendations.append(
                     "Add JSON-LD Schema (Article, FAQPage, or Product) to qualify for Google rich search results."
                 )
 
-            # 6. Page Speed / TTFB
+            # 6. HTTP Request Latency / Round-Trip Time
             avg_speed = sum(c.response_time_ms for c in competitors) / len(competitors)
             if your_metrics.response_time_ms > avg_speed * 1.5 and your_metrics.response_time_ms > 1000:
-                gaps.append(f"Page Speed Gap: Your page loads in {your_metrics.response_time_ms:.0f}ms vs competitors average {avg_speed:.0f}ms.")
+                gaps.append(f"HTTP Latency Gap: Your page round-trip latency is {your_metrics.response_time_ms:.0f}ms vs competitors average {avg_speed:.0f}ms.")
                 recommendations.append(
-                    "Improve server response time and enable caching to match or beat competitor speeds."
+                    "Improve server response time (TTFB/RTT) and enable edge caching to improve server latency relative to competitors."
                 )
 
         # Compute competitive gap score (0-100; 100 = parity or better)
