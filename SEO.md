@@ -35,7 +35,7 @@ Most traditional SEO crawlers produce noisy false alarms by naively applying sta
 
 3. **Release Gate Evaluation (`audit_status`) & Strict Quality Gating**:
    Eliminates false green `PASS` scores when high-severity defects exist:
-   - `STAGING_PROTECTED`: Staging environment correctly protected with `noindex` directives. No score deduction applied.
+   - `STAGING_PROTECTED`: Staging environment correctly protected with `noindex` directives. Production readiness is `0/100` while the host is non-indexable; the separate technical diagnostics score remains available.
    - `INDEXATION_BLOCKED`: Release blocker! Production public pages blocked with sitewide `noindex`. Overall score capped at `0/100`.
    - `CRITICAL_BLOCKED`: Critical technical defects detected. Score capped at max `49.0/100`.
    - `NEEDS_REVIEW`: Triggered if ANY HIGH-severity defect is detected (e.g. `MALFORMED_OG_URL`, `HTTP_404_INTERNAL_LINKED`, duplicate titles). Master score is strictly capped at max `84.9/100`.

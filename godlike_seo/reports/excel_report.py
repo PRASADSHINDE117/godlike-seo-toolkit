@@ -86,7 +86,8 @@ class ExcelReportGenerator:
 
         # Key Metrics Block
         metrics = [
-            ("Overall SEO Health Score", f"{report.overall_score:.0f}/100"),
+            ("Production SEO Readiness Score", f"{report.overall_score:.0f}/100"),
+            ("Technical Diagnostics Score", f"{report.diagnostic_score:.0f}/100"),
             ("Audit Release Status", report.audit_status),
             ("Environment Intent", report.environment_intent.upper()),
             ("Pages Crawled", stats.get("total_pages_crawled", len(report.crawl_result.pages) if report.crawl_result else 0)),
@@ -138,7 +139,7 @@ class ExcelReportGenerator:
         # ---------------------------------------------------------------
         ws_issues = wb.create_sheet(title="Actionable Issue Clusters")
         headers_issues = [
-            "Severity", "Category", "Issue ID", "Title",
+            "Severity", "Category", "Finding Source", "Issue ID", "Title",
             "Technical Observation", "SEO Inference & Risk",
             "Occurrences", "Affected URLs Count", "Impact Summary",
             "Recommended Developer Fix", "Verification Step", "Sample Evidence"
@@ -154,15 +155,16 @@ class ExcelReportGenerator:
             inf_str = getattr(cl, "inference", "") or cl.impact
             ws_issues.cell(row=r_idx, column=1, value=sev_str).font = self.bold_font
             ws_issues.cell(row=r_idx, column=2, value=cl.category.value.title())
-            ws_issues.cell(row=r_idx, column=3, value=cl.issue_id)
-            ws_issues.cell(row=r_idx, column=4, value=cl.title).font = self.bold_font
-            ws_issues.cell(row=r_idx, column=5, value=obs_str)
-            ws_issues.cell(row=r_idx, column=6, value=inf_str)
-            ws_issues.cell(row=r_idx, column=7, value=cl.occurrences_count)
-            ws_issues.cell(row=r_idx, column=8, value=len(cl.affected_urls))
-            ws_issues.cell(row=r_idx, column=9, value=cl.impact)
-            ws_issues.cell(row=r_idx, column=10, value=cl.recommendation).font = Font(name="Calibri", size=10, color="0369A1")
-            ws_issues.cell(row=r_idx, column=11, value=cl.verification_step)
+            ws_issues.cell(row=r_idx, column=3, value=getattr(cl, "finding_source", "raw_html"))
+            ws_issues.cell(row=r_idx, column=4, value=cl.issue_id)
+            ws_issues.cell(row=r_idx, column=5, value=cl.title).font = self.bold_font
+            ws_issues.cell(row=r_idx, column=6, value=obs_str)
+            ws_issues.cell(row=r_idx, column=7, value=inf_str)
+            ws_issues.cell(row=r_idx, column=8, value=cl.occurrences_count)
+            ws_issues.cell(row=r_idx, column=9, value=len(cl.affected_urls))
+            ws_issues.cell(row=r_idx, column=10, value=cl.impact)
+            ws_issues.cell(row=r_idx, column=11, value=cl.recommendation).font = Font(name="Calibri", size=10, color="0369A1")
+            ws_issues.cell(row=r_idx, column=12, value=cl.verification_step)
 
             if cl.sample_evidence:
                 ev_items = []
@@ -230,6 +232,10 @@ class ExcelReportGenerator:
                         chain_parts.append(str(hop))
                 chain_str = " -> ".join(chain_parts) if chain_parts else "Direct (200)"
 
+                idx_ev = getattr(page, "indexability_evidence", None)
+                idx_status_str = idx_ev.status.value.upper() if idx_ev else ("INDEXABLE_CANDIDATE" if page.is_indexable else "NON_INDEXABLE")
+                idx_reason_str = (idx_ev.proven_summary if idx_ev and idx_ev.proven_summary else page.indexability_reason) or "No blocking directives"
+
                 ws_pages.cell(row=r_idx, column=1, value=page.url)
                 ws_pages.cell(row=r_idx, column=2, value=page.final_url or page.url)
                 ws_pages.cell(row=r_idx, column=3, value=chain_str)
@@ -237,7 +243,7 @@ class ExcelReportGenerator:
                 ws_pages.cell(row=r_idx, column=5, value=pt_val.replace('_', ' ').upper())
                 ws_pages.cell(row=r_idx, column=6, value=page.content_type)
                 ws_pages.cell(row=r_idx, column=7, value="Yes" if page.is_indexable else "No")
-                ws_pages.cell(row=r_idx, column=8, value=page.indexability_reason or ("Indexable" if page.is_indexable else "Non-indexable"))
+                ws_pages.cell(row=r_idx, column=8, value=page.indexability_reason or ("Indexable candidate" if page.is_indexable else "Non-indexable"))
                 ws_pages.cell(row=r_idx, column=9, value=canon_state_val)
                 ws_pages.cell(row=r_idx, column=10, value=page.canonical_url or "")
                 ws_pages.cell(row=r_idx, column=11, value=in_inlinks)

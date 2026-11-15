@@ -212,6 +212,7 @@ class HTMLReportGenerator:
                         <h3>{html.escape(cluster.title)}</h3>
                     </div>
                     <div style="display: flex; gap: 8px; align-items: center;">
+                        <span class="badge" style="background: #1E293B; color: #38BDF8;">Source: {html.escape(getattr(cluster, "finding_source", "raw_html"))}</span>
                         <span class="badge" style="background: #1E293B; color: #94A3B8;">Confidence: {cluster.confidence.value.upper()}</span>
                         {sev_badge}
                     </div>
@@ -609,7 +610,7 @@ class HTMLReportGenerator:
         <!-- Scores & Methodology -->
         <div class="grid-2">
             <div class="card score-card">
-                <h3 style="margin-bottom: 8px;">Overall SEO Health</h3>
+                <h3 style="margin-bottom: 8px;">Production SEO Readiness</h3>
                 <div style="margin-bottom: 12px;">
                     <span class="badge" style="background: {'rgba(239, 68, 68, 0.2)' if ('BLOCKED' in report.audit_status or 'FAIL' in report.audit_status) else ('rgba(245, 158, 11, 0.2)' if report.audit_status in ('NEEDS_REVIEW', 'INSUFFICIENT_COVERAGE', 'INDEXATION_WARNING') else ('rgba(59, 130, 246, 0.2)' if report.audit_status == 'STAGING_PROTECTED' else ('rgba(148, 163, 184, 0.2)' if report.audit_status == 'INCONCLUSIVE' else 'rgba(16, 185, 129, 0.2)')))}; color: {'#EF4444' if ('BLOCKED' in report.audit_status or 'FAIL' in report.audit_status) else ('#F59E0B' if report.audit_status in ('NEEDS_REVIEW', 'INSUFFICIENT_COVERAGE', 'INDEXATION_WARNING') else ('#60A5FA' if report.audit_status == 'STAGING_PROTECTED' else ('#94A3B8' if report.audit_status == 'INCONCLUSIVE' else '#10B981')))}; padding: 5px 12px; font-weight: bold; font-size: 0.82rem;">{report.audit_status}</span>
                 </div>
@@ -621,8 +622,9 @@ class HTMLReportGenerator:
                     {score:.0f}
                 </div>
                 <p style="color: var(--text-muted); font-size: 0.85rem; padding: 0 10px;">
-                    Calculated from weighted evaluation of {stats.get('total_tests_evaluated', 39)} technical, on-page, and architectural checks.
+                    Release readiness accounts for indexability and critical release gates. Technical diagnostics score reflects {stats.get('total_tests_evaluated', 39)} weighted technical, on-page, and architectural checks.
                 </p>
+                <p style="color: var(--text-muted); font-size: 0.85rem; padding: 0 10px;">Technical diagnostics score: <strong>{report.diagnostic_score:.0f}/100</strong></p>
             </div>
 
             <div class="card">

@@ -248,14 +248,8 @@ class SEOIssueDetector:
             root_url = pages[0].url
             all_affected = [p.url for p, _ in noindex_pages]
 
-            # Detect environment intent
-            env = self.environment
-            if not env or env == "unknown":
-                domain_str = urlparse(root_url).netloc.lower()
-                if any(k in domain_str for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
-                    env = "staging"
-                else:
-                    env = "unknown"
+            # Detect environment intent (Requirement 4: Never infer staging from hostname alone)
+            env = self.environment or "unknown"
 
             if env == "staging":
                 issues.append(SEOIssue(
@@ -367,6 +361,59 @@ class SEOIssueDetector:
 
     def _check_robots_and_snippets(self, page: PageData) -> List[SEOIssue]:
         issues = []
+        # 1. Robots.txt Disallow and its interaction with noindex (Requirement 1 & Google Documentation)
+        robots_txt_status = getattr(page, "robots_txt_status", "ALLOWED")
+        noindex_meta = getattr(page, "meta_robots", "") or ""
+        noindex_header = getattr(page, "x_robots_tag", "") or ""
+        has_noindex = "noindex" in noindex_meta.lower() or "noindex" in noindex_header.lower()
+
+        if robots_txt_status == "DISALLOWED":
+            if has_noindex:
+                issues.append(SEOIssue(
+                    issue_id="ROBOTS_BLOCKS_NOINDEX_DETECTION",
+                    severity=IssueSeverity.HIGH,
+                    category=IssueCategory.TECHNICAL,
+                    title="Robots.txt Disallow Prevents Crawlers from Seeing 'noindex' Directive",
+                    description="URL is disallowed in robots.txt while also specifying a 'noindex' tag/header.",
+                    affected_url=page.url,
+                    evidence=f"robots.txt Disallow active | Page serves noindex: meta='{noindex_meta}', header='{noindex_header}'",
+                    observation="URL is disallowed by robots.txt and also specifies a 'noindex' directive.",
+                    inference=(
+                        "Google explicitly warns: a robots.txt Disallow prevents search engines from crawling the page to read the "
+                        "<meta name='robots' content='noindex'> tag. Consequently, Google may still index this URL based on "
+                        "incoming internal or external anchor links without snippet content. To ensure de-indexation, remove "
+                        "the robots.txt Disallow rule so crawlers can access the page and parse the noindex directive."
+                    ),
+                    impact="Page intended for de-indexation may continue appearing in Google search results.",
+                    recommendation="Remove the Disallow rule in robots.txt allowing search crawlers to see and honor the 'noindex' directive.",
+                    verification_step="Verify in robots.txt that Googlebot can fetch the URL and inspect response headers for noindex.",
+                    confidence=IssueConfidence.HIGH,
+                    finding_source="both",
+                    check_method="robots_txt_parser",
+                ))
+            else:
+                issues.append(SEOIssue(
+                    issue_id="ROBOTS_TXT_DISALLOWED_PAGE",
+                    severity=IssueSeverity.MEDIUM,
+                    category=IssueCategory.TECHNICAL,
+                    title="URL Blocked by Robots.txt Disallow Directive",
+                    description="Robots.txt file restricts search crawlers from fetching this URL.",
+                    affected_url=page.url,
+                    evidence="Disallowed by matching rule in robots.txt for User-Agent.",
+                    observation="URL path matches a Disallow directive in robots.txt.",
+                    inference=(
+                        "Search engines cannot crawl page contents or follow links on this URL. "
+                        "Notice: Disallow blocks crawling, but Google may still index the URL if referenced by backlinks. "
+                        "If the goal is to block indexing, serve 'noindex' without blocking the crawler."
+                    ),
+                    impact="Crawlers cannot evaluate content, calculate link equity, or render snippets.",
+                    recommendation="If this page should be crawled and indexed, remove or refine the Disallow rule in robots.txt.",
+                    verification_step="Check robots.txt syntax and verify with Google Search Console URL Inspection.",
+                    confidence=IssueConfidence.HIGH,
+                    finding_source="raw_html",
+                    check_method="robots_txt_parser",
+                ))
+
         if getattr(page, "is_snippet_blocked", False):
             reason = getattr(page, "snippet_blocking_reason", "nosnippet / max-snippet:0")
             issues.append(SEOIssue(
@@ -383,6 +430,8 @@ class SEOIssueDetector:
                 recommendation="Remove 'nosnippet' or change 'max-snippet:0' to 'max-snippet:-1' (or omit the directive) unless snippet restriction is legally required.",
                 verification_step="Verify meta robots tag does not include nosnippet or max-snippet:0.",
                 confidence=IssueConfidence.HIGH,
+                finding_source="both",
+                check_method="http_headers",
             ))
         return issues
 
@@ -590,7 +639,38 @@ class SEOIssueDetector:
         issues = []
         title = (page.title or "").strip()
 
+        # Check raw vs rendered title (Requirement 2: Compare raw vs rendered HTML)
+        raw_t = (getattr(page, "raw_title", "") or "").strip()
+        rendered_t = (getattr(page, "rendered_title", "") or "").strip()
+        render_status = getattr(page, "render_status", "static_http")
+
+        if render_status == "rendered_playwright" and not raw_t and rendered_t:
+            issues.append(SEOIssue(
+                issue_id="TITLE_CLIENT_SIDE_RENDERED",
+                severity=IssueSeverity.INFORMATIONAL,
+                category=IssueCategory.ON_PAGE,
+                title="Title Tag Injected Client-Side via JavaScript",
+                description=f"Raw HTML lacked a <title> tag, but headless browser rendering executed JavaScript and created: '{rendered_t[:60]}'",
+                affected_url=page.url,
+                evidence=f"Raw HTML: <title> absent | Rendered DOM: <title>{rendered_t}</title>",
+                observation=f"Title is rendered exclusively by client-side JavaScript ('{rendered_t}').",
+                inference="While modern search engines (Googlebot) execute JavaScript, client-side metadata injection incurs rendering queue delays and risks search engines using fallback or blank snippets if JS execution fails or times out. Server-side rendering (SSR) is recommended.",
+                impact="Potential delay in search snippet updates until Google's Web Rendering Service processes the JavaScript.",
+                recommendation="Pre-render or server-render the <title> tag in the initial HTML response for deterministic indexing.",
+                verification_step="Inspect initial curl / View Source HTML to confirm <title> is present before JS execution.",
+                confidence=IssueConfidence.HIGH,
+                finding_source="both",
+                check_method="playwright_rendered_dom",
+            ))
+
         if not title:
+            is_spa = any(m in getattr(page, "html_raw", "").lower() for m in ('id="root"', 'id="__next"', 'id="app"', 'data-reactroot'))
+            if is_spa and render_status == "static_http":
+                source_label = "unverified_unrendered"
+                obs = "Page source contains SPA mount element (e.g. #root / #__next) but <title> is absent in raw HTML. Rendered DOM unverified (crawled in static HTTP mode)."
+            else:
+                source_label = "raw_html"
+                obs = "<title> element is absent in page source."
             issues.append(SEOIssue(
                 issue_id="MISSING_TITLE_TAG",
                 severity=IssueSeverity.HIGH,
@@ -599,10 +679,12 @@ class SEOIssueDetector:
                 description="The page HTML does not have a <title> element.",
                 affected_url=page.url,
                 evidence="<head> inspected; <title> is absent or empty.",
+                observation=obs,
                 impact="Title is Google's primary on-page ranking signal and defines the snippet in search engine results pages.",
                 recommendation="Add a descriptive, keyword-rich <title> tag between 10 and 65 characters.",
-                verification_step="Inspect <title> in page source.",
+                verification_step="Inspect <title> in page source or re-run with --render-js.",
                 confidence=IssueConfidence.HIGH,
+                finding_source=source_label,
             ))
             return issues
 
@@ -844,25 +926,113 @@ class SEOIssueDetector:
                     confidence=IssueConfidence.HIGH,
                 ))
 
-            # Target canonical points to 4xx client error
+            # End-to-end Canonical Target Validation (Requirement 3: Resolve relative, follow redirects, check indexability)
             if norm_canon in pages_by_url:
                 target_page = pages_by_url[norm_canon]
-                if target_page.status_code >= 400:
+                t_status = target_page.status_code
+
+                # 1. Target returns 4xx Client Error
+                if 400 <= t_status < 500:
                     issues.append(SEOIssue(
                         issue_id="CANONICAL_POINTS_TO_4XX",
                         severity=IssueSeverity.HIGH,
                         category=IssueCategory.TECHNICAL,
-                        title="Canonical URL Points to 4xx Client Error",
-                        description=f"Page specifies canonical target '{canon}' which returns HTTP {target_page.status_code}.",
+                        title="Canonical Target Returns 4xx Client Error",
+                        description=f"Page specifies canonical target '{canon}' which returns HTTP {t_status}.",
                         affected_url=page.url,
-                        evidence=f"Canonical href='{canon}' resolved to HTTP {target_page.status_code}",
-                        observation=f"Canonical URL directive points to an error page (HTTP {target_page.status_code}).",
-                        inference="Search engines cannot index or consolidate ranking signals to a broken canonical destination.",
-                        impact="Critical indexing breakdown: canonical target returns an error status code.",
+                        evidence=f"Canonical href='{canon}' resolved to HTTP {t_status}",
+                        observation=f"Canonical URL directive points to an error page (HTTP {t_status}).",
+                        inference="Search engines cannot index or consolidate ranking signals to a broken canonical destination. Note: Canonical declarations are strong signals to Google, but pointing to an error page renders the signal unusable.",
+                        impact="Critical indexing breakdown: search engines cannot honor a canonical pointing to a non-existent destination.",
                         recommendation="Update the canonical URL to point to a valid, live 200 OK page, or remove the canonical directive.",
                         verification_step="Verify canonical href target returns HTTP 200 OK.",
                         confidence=IssueConfidence.HIGH,
+                        finding_source="raw_html",
                     ))
+
+                # 2. Target returns 5xx Server Error
+                elif t_status >= 500:
+                    issues.append(SEOIssue(
+                        issue_id="CANONICAL_POINTS_TO_5XX",
+                        severity=IssueSeverity.CRITICAL,
+                        category=IssueCategory.TECHNICAL,
+                        title="Canonical Target Returns 5xx Server Error",
+                        description=f"Page specifies canonical target '{canon}' which returns HTTP {t_status} Server Error.",
+                        affected_url=page.url,
+                        evidence=f"Canonical href='{canon}' returned HTTP {t_status}",
+                        observation=f"Canonical URL directive points to an unserved 5xx server error.",
+                        inference="Search engines will reject the canonical target and may drop the referring page from indexing if the destination remains down.",
+                        impact="Severe risk of de-indexing or unpredictable canonical fallback.",
+                        recommendation="Fix backend server errors on the canonical destination or redirect to a stable equivalent.",
+                        verification_step="Confirm destination URL returns HTTP 200 without internal server errors.",
+                        confidence=IssueConfidence.HIGH,
+                        finding_source="raw_html",
+                    ))
+
+                # 3. Target is a 3xx Redirect (Anti-Pattern)
+                elif t_status in (301, 302, 303, 307, 308) or getattr(target_page, "redirect_chain", []):
+                    dest = getattr(target_page, "final_url", canon)
+                    issues.append(SEOIssue(
+                        issue_id="CANONICAL_POINTS_TO_REDIRECT",
+                        severity=IssueSeverity.HIGH,
+                        category=IssueCategory.TECHNICAL,
+                        title="Canonical Target Points to a 3xx Redirect",
+                        description=f"Canonical target '{canon}' redirects with HTTP {t_status} to '{dest}'.",
+                        affected_url=page.url,
+                        evidence=f"Canonical href='{canon}' redirects to '{dest}'",
+                        observation=f"Canonical target URL is not a final destination; it responds with a redirect (HTTP {t_status}).",
+                        inference="Google's canonicalization guidelines require canonical links to point directly to the final destination URL. Canonicalizing to a redirect creates an ambiguous multi-hop signal that Googlebot often ignores, selecting an arbitrary URL instead.",
+                        impact="Weakens canonical signals; forces search engines to guess which URL to index.",
+                        recommendation=f"Update the canonical link tag on this page to point directly to the final destination: '{dest}'.",
+                        verification_step="Follow canonical href and verify it returns HTTP 200 directly with no intermediate redirect hops.",
+                        confidence=IssueConfidence.HIGH,
+                        finding_source="raw_html",
+                    ))
+
+                # 4. Target specifies 'noindex' (Severe Conflict)
+                t_noindex = (
+                    "noindex" in getattr(target_page, "x_robots_tag", "").lower()
+                    or "noindex" in getattr(target_page, "meta_robots", "").lower()
+                )
+                if t_noindex:
+                    issues.append(SEOIssue(
+                        issue_id="CANONICAL_POINTS_TO_NOINDEX",
+                        severity=IssueSeverity.CRITICAL,
+                        category=IssueCategory.TECHNICAL,
+                        title="Canonical Target Specifies 'noindex' Directive",
+                        description=f"Canonical target '{canon}' explicitly specifies a 'noindex' directive.",
+                        affected_url=page.url,
+                        evidence=f"Canonical target '{canon}' emits 'noindex' directive.",
+                        observation="Page canonicalizes to a destination URL that is configured not to be indexed.",
+                        inference="Google explicitly warns against this anti-pattern: canonicalizing to a page that declares noindex creates conflicting instructions. Google may drop both the referring page and the target page entirely from the search index.",
+                        impact="Direct indexation loss: search engines will not index the target and may drop the source page.",
+                        recommendation="Remove 'noindex' from the target page if it is the authoritative version, or point the canonical to an indexable 200 OK page.",
+                        verification_step="Inspect target page headers/meta to confirm noindex is removed.",
+                        confidence=IssueConfidence.HIGH,
+                        finding_source="raw_html",
+                    ))
+
+                # 5. Canonical Target Loop (A -> B -> A)
+                target_canon = getattr(target_page, "canonical_url", "")
+                if target_canon and not are_urls_equivalent(norm_canon, page.url):
+                    norm_target_canon = normalize_url(target_canon)
+                    if are_urls_equivalent(norm_target_canon, page.url):
+                        issues.append(SEOIssue(
+                            issue_id="CANONICAL_TARGET_LOOP",
+                            severity=IssueSeverity.HIGH,
+                            category=IssueCategory.TECHNICAL,
+                            title="Reciprocal Canonical Target Loop (A ↔ B)",
+                            description=f"URL '{page.url}' points canonical to '{canon}', which points canonical back to '{target_canon}'.",
+                            affected_url=page.url,
+                            evidence=f"Loop: {page.url} -> {canon} -> {target_canon}",
+                            observation="Two pages declare reciprocal canonical links pointing to each other.",
+                            inference="A circular canonical loop creates an unresolvable contradiction. Search engines ignore both directives and pick a canonical based on heuristics.",
+                            impact="Canonical directives are invalidated and ignored by search engines.",
+                            recommendation="Select exactly one authoritative URL and ensure all duplicate or variant pages point strictly to it.",
+                            verification_step="Verify canonical points strictly one-way to the designated primary page.",
+                            confidence=IssueConfidence.HIGH,
+                            finding_source="raw_html",
+                        ))
         return issues
 
     # ------------------------------------------------------------------

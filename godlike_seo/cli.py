@@ -223,7 +223,7 @@ def crawl(
         status_col = "green" if report.audit_status == "PASS" else ("cyan" if report.audit_status == "STAGING_PROTECTED" else "red")
         console.print()
         console.print(Panel.fit(
-            f"Overall Health Score: [bold {score_color}]{report.overall_score:.0f}/100[/bold {score_color}] | Release Status: [bold {status_col}]{report.audit_status}[/] ({report.environment_intent.upper()})\n"
+            f"Production SEO Readiness: [bold {score_color}]{report.overall_score:.0f}/100[/bold {score_color}] | Technical Diagnostics: {report.diagnostic_score:.0f}/100 | Release Status: [bold {status_col}]{report.audit_status}[/] ({report.environment_intent.upper()})\n"
             f"Pages Crawled: {len(crawl_result.pages)} | Unique Issue Clusters: [bold]{stats.get('unique_issue_clusters', 0)}[/bold] | Raw Occurrences: {stats.get('total_raw_occurrences', 0)}\n"
             f"Critical Blockers: [bold {'red' if stats.get('critical_clusters_count', 0) > 0 else 'green'}]{stats.get('critical_clusters_count', 0)}[/] | Orphaned Pages: {len(crawl_result.orphaned_pages)}",
             title="[bold]Diagnostic Summary[/bold]",
@@ -295,6 +295,7 @@ def crawl(
             "url": report.url,
             "domain": report.domain,
             "overall_score": report.overall_score,
+            "diagnostic_score": report.diagnostic_score,
             "audit_status": report.audit_status,
             "status_message": report.status_message,
             "environment_intent": report.environment_intent,

@@ -49,7 +49,8 @@ class MarkdownReportGenerator:
 
         # 2. Executive Metrics
         lines.append("## 📊 Executive Overview")
-        lines.append(f"- **Overall Health Score:** `{report.overall_score:.0f}/100`")
+        lines.append(f"- **Production SEO Readiness:** `{report.overall_score:.0f}/100`")
+        lines.append(f"- **Technical Diagnostics Score:** `{report.diagnostic_score:.0f}/100`")
         lines.append(f"- **Audit Status:** `{report.audit_status}`")
         lines.append(f"- **Environment Intent:** `{report.environment_intent.upper()}`")
         lines.append(f"- **Evaluated Pages:** `{pages_crawled}`")
@@ -126,7 +127,7 @@ class MarkdownReportGenerator:
             inf_text = getattr(cluster, "inference", "") or cluster.impact
 
             lines.append(f"### [{sev_tag}] {cluster.title}")
-            lines.append(f"- **Category:** `{cat_tag}` | **Confidence:** `{cluster.confidence.value.upper()}`")
+            lines.append(f"- **Category:** `{cat_tag}` | **Confidence:** `{cluster.confidence.value.upper()}` | **Finding Source:** `{getattr(cluster, 'finding_source', 'raw_html')}`")
             lines.append(f"- **Occurrences:** `{cluster.occurrences_count}` instance(s) across {len(cluster.affected_urls)} page(s)")
             lines.append(f"- **Technical Observation:** {obs_text}")
             lines.append(f"- **SEO Inference & Risk:** {inf_text}")

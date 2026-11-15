@@ -73,6 +73,18 @@ class CanonicalState(str, Enum):
     INVALID = "invalid"                      # Malformed URL or non-HTTP scheme
 
 
+class IndexabilityStatus(str, Enum):
+    """Calibrated crawler-proven indexability status."""
+    INDEXABLE_CANDIDATE = "indexable_candidate"  # HTTP 200, allowed by robots.txt, no noindex, valid canonical
+    BLOCKED_BY_NOINDEX = "blocked_by_noindex"    # <meta name="robots" content="noindex"> or X-Robots-Tag: noindex
+    BLOCKED_BY_ROBOTS = "blocked_by_robots"      # Disallowed by robots.txt (may still be indexed via backlinks without snippet)
+    REDIRECT = "redirect"                        # 3xx redirect destination
+    CLIENT_ERROR = "client_error"                # 4xx client error
+    SERVER_ERROR = "server_error"                # 5xx server error
+    CANONICALIZED_AWAY = "canonicalized_away"    # Declares canonical target pointing to another URL
+    UNCHECKED = "unchecked"                      # Not evaluated
+
+
 class CheckStatus(str, Enum):
     """Audit rule execution ledger status."""
     PASS = "pass"
@@ -310,6 +322,23 @@ class RedirectHop(DictCompatible):
     status_code: int
 
 
+@dataclass
+class IndexabilityEvidence(DictCompatible):
+    """Structured proof of indexability signals gathered by crawler."""
+    status: IndexabilityStatus = IndexabilityStatus.INDEXABLE_CANDIDATE
+    http_status_code: int = 200
+    robots_txt_access: str = "ALLOWED"  # "ALLOWED", "DISALLOWED", "UNCHECKED"
+    noindex_detected: bool = False
+    noindex_source: Optional[str] = None  # "meta_robots", "x_robots_tag", "both", None
+    canonical_target: Optional[str] = None
+    canonical_state: CanonicalState = CanonicalState.MISSING
+    canonical_target_status_code: Optional[int] = None
+    canonical_target_indexable: Optional[bool] = None
+    redirect_target: Optional[str] = None
+    proven_summary: str = ""
+    disclaimer: str = "Actual search index status requires Google Search Console verification."
+
+
 # ---------------------------------------------------------------------------
 # PageData – Primary crawled page model
 # ---------------------------------------------------------------------------
@@ -335,6 +364,19 @@ class PageData(DictCompatible):
     # Raw response body & DOM presence
     has_html: bool = True
     html_raw: str = ""
+
+    # Raw vs Rendered metadata tracking
+    raw_title: str = ""
+    rendered_title: str = ""
+    raw_meta_description: str = ""
+    rendered_meta_description: str = ""
+    raw_canonical: Optional[str] = None
+    rendered_canonical: Optional[str] = None
+    raw_h1_tags: List[str] = field(default_factory=list)
+    raw_structured_data_count: int = 0
+    rendered_structured_data_count: int = 0
+    robots_txt_status: str = "ALLOWED"  # "ALLOWED", "DISALLOWED", "UNCHECKED"
+    indexability_evidence: Optional[IndexabilityEvidence] = None
 
     # <head> meta
     title: str = ""
@@ -556,6 +598,8 @@ class SEOIssue(DictCompatible):
     recommendation: str = ""
     verification_step: str = ""
     confidence: IssueConfidence = IssueConfidence.HIGH
+    finding_source: str = "raw_html"   # "raw_html", "rendered_dom", "both", "unverified_unrendered"
+    check_method: str = "dom_traversal" # "dom_traversal", "http_headers", "playwright_rendered_dom", "robots_txt_parser"
     url: str = ""                      # Alias for affected_url
     source_pages: List[str] = field(default_factory=list)
     anchor_text: str = ""
@@ -639,6 +683,8 @@ class IssueCluster(DictCompatible):
     occurrences_count: int = 1
     affected_urls: List[str] = field(default_factory=list)
     sample_evidence: List[Dict[str, str]] = field(default_factory=list)  # [{"url": ..., "evidence": ...}]
+    finding_source: str = "raw_html"
+    check_method: str = "dom_traversal"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -790,6 +836,7 @@ class SEOReport(DictCompatible):
 
     # Overall score 0-100 & calculation breakdown
     overall_score: float = 0.0
+    diagnostic_score: float = 0.0
     category_scores: Dict[str, CategoryScore] = field(default_factory=dict)
     all_deductions: List[ScoreDeduction] = field(default_factory=list)
 

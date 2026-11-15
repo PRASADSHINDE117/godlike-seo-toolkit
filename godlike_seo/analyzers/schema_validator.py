@@ -244,7 +244,7 @@ class SchemaValidator:
                             confidence=IssueConfidence.HIGH,
                         ))
 
-            # 3. Check Recommended Properties (Advisory)
+            # 3. Check Recommended Properties (Advisory / Non-penalizing Opportunity)
             missing_recommended = [
                 rec for rec in spec.get("recommended", [])
                 if not data.get(rec)
@@ -253,16 +253,16 @@ class SchemaValidator:
                 rec_str = ", ".join(missing_recommended[:3])
                 issues.append(SEOIssue(
                     issue_id="SCHEMA_MISSING_RECOMMENDED_PROPERTY",
-                    severity=IssueSeverity.LOW,
+                    severity=IssueSeverity.INFORMATIONAL,
                     category=IssueCategory.STRUCTURED_DATA,
                     title=f"Schema.org {stype} Opportunity: Add Recommended Properties",
-                    description=f"{stype} schema could be enhanced by adding recommended properties: {rec_str}",
+                    description=f"{stype} schema is valid and eligible, and could be enhanced by adding recommended properties: {rec_str}",
                     affected_url=page.url,
-                    evidence=f"{stype} missing recommended: [{rec_str}]",
-                    observation=f"{stype} markup omits recommended properties: {rec_str}.",
-                    inference="Providing recommended properties gives Google more structured context, increasing rich snippet display chances.",
-                    impact="Advisory recommendation to enhance rich snippet visual prominence.",
-                    recommendation=f"Add recommended properties ({rec_str}) to enhance snippet richness.",
+                    evidence=f"{stype} missing optional/recommended: [{rec_str}]",
+                    observation=f"{stype} markup omits recommended optional properties: {rec_str}. The structured data is valid.",
+                    inference="Providing recommended properties gives Google more structured context, but omission is not an error and does not invalidate eligibility.",
+                    impact="Advisory suggestion only; valid schema is not penalized.",
+                    recommendation=f"Add recommended properties ({rec_str}) if available in your database to enhance snippet richness.",
                     verification_step="Confirm additional properties appear in structured data validator.",
                     confidence=IssueConfidence.MEDIUM,
                 ))

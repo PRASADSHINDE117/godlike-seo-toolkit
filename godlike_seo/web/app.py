@@ -278,11 +278,11 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
                 document.getElementById('crawl-summary').innerHTML = `
                     <div style="display: flex; gap: 15px; align-items: center; margin: 12px 0;">
-                        <span style="font-size: 1.6rem; font-weight: 800; color: ${data.overall_score >= 85 ? '#10B981' : (data.overall_score >= 65 ? '#F59E0B' : '#EF4444')};">${data.overall_score}/100</span>
+                        <span style="font-size: 1.6rem; font-weight: 800; color: ${data.overall_score >= 85 ? '#10B981' : (data.overall_score >= 65 ? '#F59E0B' : '#EF4444')};">${data.overall_score}/100 readiness</span>
                         <span style="background: rgba(255,255,255,0.08); border: 1px solid ${statusBadgeCol}; color: ${statusBadgeCol}; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85rem;">${data.audit_status}</span>
                     </div>
                     <p style="color: #94A3B8; font-size: 0.9rem; margin-bottom: 8px;">${data.status_message}</p>
-                    <p style="font-size: 0.88rem; color: #CBD5E1;"><strong>Pages Crawled:</strong> ${data.summary_stats.total_pages_crawled} | <strong>Coverage:</strong> ${data.summary_stats.crawl_coverage_pct || 100}% | <strong>Orphaned:</strong> ${data.summary_stats.orphaned_pages_count} | <strong>Critical Issues:</strong> ${data.summary_stats.critical_issues_count}</p>
+                    <p style="font-size: 0.88rem; color: #CBD5E1;"><strong>Technical diagnostics:</strong> ${data.diagnostic_score}/100 | <strong>Pages Crawled:</strong> ${data.summary_stats.total_pages_crawled} | <strong>Coverage:</strong> ${data.summary_stats.crawl_coverage_pct || 100}% | <strong>Orphaned:</strong> ${data.summary_stats.orphaned_pages_count} | <strong>Critical Issues:</strong> ${data.summary_stats.critical_issues_count}</p>
                 `;
                 document.getElementById('report-link').href = '/report/' + data.domain;
             } catch(e) {
@@ -386,6 +386,7 @@ def api_crawl():
     return jsonify({
         "domain": report.domain,
         "overall_score": report.overall_score,
+        "diagnostic_score": report.diagnostic_score,
         "audit_status": report.audit_status,
         "status_message": report.status_message,
         "summary_stats": report.summary_stats,

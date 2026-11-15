@@ -48,6 +48,8 @@ from godlike_seo.models import (
     HeadingData,
     HreflangTag,
     ImageData,
+    IndexabilityEvidence,
+    IndexabilityStatus,
     LinkData,
     OpenGraphData,
     PageData,
@@ -647,40 +649,136 @@ class SEOCrawler:
         word_count = len(words)
         content_hash = hashlib.md5(text_content.encode("utf-8", errors="ignore")).hexdigest()
 
-        # Comprehensive Indexability Determination
+        # Raw vs Rendered metadata extraction
+        raw_soup = None
+        if raw_source_html:
+            try:
+                raw_soup = BeautifulSoup(raw_source_html, "lxml")
+            except Exception:
+                raw_soup = BeautifulSoup(raw_source_html, "html.parser")
+        else:
+            raw_soup = soup
+
+        raw_title_tag = raw_soup.find("title")
+        raw_title = raw_title_tag.get_text(strip=True) if raw_title_tag else ""
+        raw_desc_tag = raw_soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+        raw_meta_desc = (raw_desc_tag.get("content") or "").strip() if raw_desc_tag else ""
+        raw_can_tag = raw_soup.find("link", attrs={"rel": re.compile(r"^canonical$", re.I)})
+        raw_canonical = (raw_can_tag.get("href") or "").strip() if raw_can_tag else None
+        raw_h1_tags = [h.get_text(strip=True) for h in raw_soup.find_all("h1")]
+        raw_sd_count = len(raw_soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}))
+
+        rendered_title = ""
+        rendered_meta_desc = ""
+        rendered_canonical = None
+        rendered_h1s: List[str] = []
+        rendered_sd_count = 0
+        if rendered_dom:
+            try:
+                rendered_soup = BeautifulSoup(rendered_dom, "lxml")
+            except Exception:
+                rendered_soup = BeautifulSoup(rendered_dom, "html.parser")
+            r_title_tag = rendered_soup.find("title")
+            rendered_title = r_title_tag.get_text(strip=True) if r_title_tag else ""
+            r_desc_tag = rendered_soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+            rendered_meta_desc = (r_desc_tag.get("content") or "").strip() if r_desc_tag else ""
+            r_can_tag = rendered_soup.find("link", attrs={"rel": re.compile(r"^canonical$", re.I)})
+            rendered_canonical = (r_can_tag.get("href") or "").strip() if r_can_tag else None
+            rendered_h1s = [h.get_text(strip=True) for h in rendered_soup.find_all("h1")]
+            rendered_sd_count = len(rendered_soup.find_all("script", attrs={"type": re.compile(r"application/ld\+json", re.I)}))
+
+        # Check robots.txt access per URL
+        robots_txt_status = "ALLOWED"
+        if self.config.respect_robots_txt and self._robots_parser:
+            try:
+                if not self._robots_parser.can_fetch(self._get_user_agent(), url):
+                    robots_txt_status = "DISALLOWED"
+            except Exception:
+                robots_txt_status = "UNCHECKED"
+        elif not self.config.respect_robots_txt:
+            robots_txt_status = "UNCHECKED"
+
+        # Comprehensive Indexability Determination & Evidence (Requirement 1)
         x_robots = headers.get("x-robots-tag", "").strip()
+        noindex_in_meta = "noindex" in meta_robots.lower()
+        noindex_in_header = "noindex" in x_robots.lower()
+        noindex_detected = noindex_in_meta or noindex_in_header
+        noindex_source = "both" if (noindex_in_meta and noindex_in_header) else ("meta_robots" if noindex_in_meta else ("x_robots_tag" if noindex_in_header else None))
+
         reasons = []
         is_indexable = True
 
-        if "noindex" in x_robots.lower():
+        if status_code >= 500:
             is_indexable = False
-            reasons.append(f"Blocked by X-Robots-Tag: '{x_robots}'")
-        if "noindex" in meta_robots.lower():
-            is_indexable = False
-            reasons.append(f"Blocked by <meta name='robots' content='{meta_robots}'>")
-        if status_code >= 400:
-            is_indexable = False
+            idx_status = IndexabilityStatus.SERVER_ERROR
+            proven_summary = f"Crawler proves: HTTP {status_code} Server Error. Search engines cannot index unserved content."
             reasons.append(f"Blocked by HTTP {status_code} Error")
-        elif status_code in (301, 302, 303, 307, 308):
+        elif status_code >= 400:
             is_indexable = False
-            reasons.append(f"Blocked by HTTP {status_code} Redirect")
-
-        if canonical_state == CanonicalState.CROSS_URL and canonical_url:
+            idx_status = IndexabilityStatus.CLIENT_ERROR
+            proven_summary = f"Crawler proves: HTTP {status_code} Client Error. Search engines omit broken URLs from results."
+            reasons.append(f"Blocked by HTTP {status_code} Error")
+        elif status_code in (301, 302, 303, 307, 308) or redirect_chain:
+            is_indexable = False
+            idx_status = IndexabilityStatus.REDIRECT
+            proven_summary = f"Crawler proves: HTTP {status_code} Redirect to {final_url}. Indexing signals consolidate to target."
+            reasons.append(f"Redirects to {final_url}")
+        elif robots_txt_status == "DISALLOWED":
+            is_indexable = False
+            idx_status = IndexabilityStatus.BLOCKED_BY_ROBOTS
+            if noindex_detected:
+                proven_summary = (
+                    "Crawler proves: Disallowed in robots.txt AND specifies noindex. "
+                    "Warning: Googlebot cannot crawl this URL to see the noindex tag; "
+                    "the URL may still appear in Google search results based on backlinks without snippet text."
+                )
+                reasons.append("Disallowed by robots.txt (blocks Googlebot from seeing noindex tag; URL may still index via backlinks)")
+            else:
+                proven_summary = (
+                    "Crawler proves: Disallowed by robots.txt. Search engines are blocked from crawling content, "
+                    "but the URL may still be indexed if linked from external pages."
+                )
+                reasons.append("Blocked by robots.txt (may still be indexed via external link signals)")
+        elif noindex_detected:
+            is_indexable = False
+            idx_status = IndexabilityStatus.BLOCKED_BY_NOINDEX
+            proven_summary = f"Crawler proves: Explicitly blocked by 'noindex' directive via {noindex_source}. Search engines honor this directive."
+            reasons.append(f"Blocked by noindex in {noindex_source}")
+        elif canonical_state == CanonicalState.CROSS_URL and canonical_url:
+            is_indexable = False
+            idx_status = IndexabilityStatus.CANONICALIZED_AWAY
+            proven_summary = f"Crawler proves: Declares cross-URL canonical pointing to '{canonical_url}' (strong indexing signal)."
             reasons.append(f"Canonical points to: '{canonical_url}'")
-        elif canonical_state == CanonicalState.MULTIPLE:
+        else:
+            idx_status = IndexabilityStatus.INDEXABLE_CANDIDATE
+            proven_summary = "Crawler proves: HTTP 200 OK, robots.txt allowed, no noindex directives, and valid canonical. Candidate for search indexation (actual live index status requires Google Search Console verification)."
+
+        if canonical_state == CanonicalState.MULTIPLE:
             reasons.append("Conflicting multiple canonical tags")
         elif canonical_state == CanonicalState.INVALID:
             reasons.append("Invalid or malformed canonical URL")
 
         if is_indexable and not reasons:
             if canonical_state == CanonicalState.SELF_REFERENCING:
-                indexability_reason = "Indexable (200 OK, explicit self-referencing canonical)"
+                indexability_reason = "Indexable candidate (200 OK, robots.txt allowed, explicit self-referencing canonical)"
             elif canonical_state == CanonicalState.RELATIVE:
-                indexability_reason = "Indexable (200 OK, relative self-canonical)"
+                indexability_reason = "Indexable candidate (200 OK, robots.txt allowed, relative self-canonical)"
             else:
-                indexability_reason = "Indexable (200 OK, no canonical declared - Google defaults to URL)"
+                indexability_reason = "Indexable candidate (200 OK, robots.txt allowed, no canonical declared - Google defaults to URL)"
         else:
             indexability_reason = "; ".join(reasons) if reasons else "Non-indexable"
+
+        idx_evidence = IndexabilityEvidence(
+            status=idx_status,
+            http_status_code=status_code,
+            robots_txt_access=robots_txt_status,
+            noindex_detected=noindex_detected,
+            noindex_source=noindex_source,
+            canonical_target=canonical_url,
+            canonical_state=canonical_state,
+            redirect_target=final_url if redirect_chain else None,
+            proven_summary=proven_summary,
+        )
 
         norm_final = normalize_url(final_url)
 
@@ -706,6 +804,17 @@ class SEOCrawler:
             crawl_depth=depth,
             has_html=True,
             html_raw=html,
+            raw_title=raw_title,
+            rendered_title=rendered_title,
+            raw_meta_description=raw_meta_desc,
+            rendered_meta_description=rendered_meta_desc,
+            raw_canonical=raw_canonical,
+            rendered_canonical=rendered_canonical,
+            raw_h1_tags=raw_h1_tags,
+            raw_structured_data_count=raw_sd_count,
+            rendered_structured_data_count=rendered_sd_count,
+            robots_txt_status=robots_txt_status,
+            indexability_evidence=idx_evidence,
             page_type=classification["page_type"],
             is_auth_gate=classification["is_auth_gate"],
             page_type_reason=classification["reason"],

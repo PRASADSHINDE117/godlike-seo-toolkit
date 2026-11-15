@@ -448,19 +448,27 @@ class ReportGenerator:
                 serp_analyses=serp_analyses or [],
             )
 
-        # Resolve environment intent
+        # Resolve environment intent (Requirement 4: Never infer staging from hostname alone)
         env_intent = environment or getattr(crawl_result, "environment", None) or self.environment or "unknown"
         if env_intent == "unknown" or not env_intent:
-            if any(k in domain.lower() for k in ("staging", "dev.", "test.", "demo.", "uat.", "localhost")):
-                env_intent = "staging"
+            # Inspect explicit server response headers for verifiable environment declarations
+            found_header_env = None
+            for p in pages[:5]:
+                for h_name, h_val in p.headers.items():
+                    if "environment" in h_name.lower():
+                        val_lower = str(h_val).lower()
+                        if "staging" in val_lower or "candidate" in val_lower or "dev" in val_lower:
+                            found_header_env = "staging"
+                            break
+                        elif "prod" in val_lower:
+                            found_header_env = "production"
+                            break
+                if found_header_env:
+                    break
+            if found_header_env:
+                env_intent = found_header_env
             else:
-                # Inspect response headers and cookies from initial pages for candidate / staging markers
-                for p in pages[:5]:
-                    h_str = " ".join(f"{k}:{v}" for k, v in p.headers.items()).lower()
-                    if any(term in h_str for term in ("candidate", "staging", "development", "preview", "tental_staging")):
-                        env_intent = "staging"
-                        break
-                # If still unconfirmed, preserve "unknown" rather than arbitrarily guessing production
+                env_intent = "unknown"
 
         # Update detector environment if needed
         self.issue_detector.environment = env_intent
@@ -597,15 +605,15 @@ class ReportGenerator:
                         affected_urls=[],
                     ))
                 elif is_poor_coverage:
-                    # Verified only on small sample
+                    # Requirement 4: Incomplete crawl - do not pass checks that weren't actually evaluated across the site
                     ledger.append(CheckResult(
                         rule_id=r_id,
-                        rule_version="3.3.1",
+                        rule_version="3.3.2",
                         category=cat,
-                        status=CheckStatus.PASS,
+                        status=CheckStatus.INCONCLUSIVE,
                         title=r_title,
                         description=r_desc,
-                        evidence=f"Verified on crawled sample ({crawled_count} of {discovered_count} discovered pages; {coverage_pct:.1f}% coverage). Full site unverified.",
+                        evidence=f"Inconclusive: Audited only {crawled_count} of {discovered_count} discovered pages ({coverage_pct:.1f}% coverage). Full site unverified.",
                         affected_count=0,
                         affected_urls=[],
                     ))
@@ -701,7 +709,8 @@ class ReportGenerator:
 
         # Weighted Master Score
         raw_score = sum(cs.score * cs.weight for cs in category_scores.values())
-        overall_score = round(raw_score, 1)
+        diagnostic_score = round(raw_score, 1)
+        overall_score = diagnostic_score
 
         # Release Gate Evaluation & Score Gating
         has_sitewide_noindex = any(c.issue_id == "SITEWIDE_INDEXATION_BLOCK" for c in clusters)
@@ -730,29 +739,34 @@ class ReportGenerator:
                 audit_status = "INDEXATION_BLOCKED"
                 status_message = (
                     "CRITICAL RELEASE BLOCKER: Sitewide 'noindex' directive detected across public pages on production host. "
-                    "Search engines cannot index this website. SEO Master Score capped at 0/100 (Indexation Blocked)."
+                    f"Search engines cannot index this website. Production readiness is 0/100; technical diagnostics score is {diagnostic_score:.1f}/100."
                 )
                 overall_score = 0.0
             elif env_intent == "staging":
                 audit_status = "STAGING_PROTECTED"
                 status_message = (
                     "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
-                    "from search engine indexing."
+                    f"from search engine indexing. Production readiness is 0/100 while this host is non-indexable; "
+                    f"technical diagnostics score is {diagnostic_score:.1f}/100."
                 )
+                overall_score = 0.0
             else:
                 audit_status = "INDEXATION_WARNING"
                 status_message = (
                     "ENVIRONMENT UNCONFIRMED: Sitewide 'noindex' directive detected across all crawled pages. "
                     "If this is a staging/testing environment, this directive is appropriate. "
-                    "If intended for production, this is a critical blocker that prevents search engine indexing."
+                    f"If intended for production, this is a critical blocker that prevents search engine indexing. "
+                    f"Readiness is 0/100 pending confirmation; technical diagnostics score is {diagnostic_score:.1f}/100."
                 )
-                overall_score = min(overall_score, 49.0)
+                overall_score = 0.0
         elif has_staging_noindex:
             audit_status = "STAGING_PROTECTED"
             status_message = (
                 "STAGING HOST: Sitewide 'noindex' directive is active, appropriately protecting staging inventory "
-                "from search engine indexing."
+                f"from search engine indexing. Production readiness is 0/100 while this host is non-indexable; "
+                f"technical diagnostics score is {diagnostic_score:.1f}/100."
             )
+            overall_score = 0.0
         elif len(critical_clusters) > 0:
             audit_status = "CRITICAL_BLOCKED"
             crit_names = ", ".join(c.title for c in critical_clusters[:2])
@@ -824,6 +838,7 @@ class ReportGenerator:
             url=crawl_result.start_url,
             domain=domain,
             overall_score=overall_score,
+            diagnostic_score=diagnostic_score,
             category_scores=category_scores,
             all_deductions=all_deductions,
             audit_status=audit_status,

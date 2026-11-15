@@ -462,6 +462,9 @@ class TestSEOAuditEngine(unittest.TestCase):
 
         self.assertEqual(report.audit_status, "STAGING_PROTECTED")
         self.assertEqual(report.environment_intent, "staging")
+        self.assertEqual(report.overall_score, 0.0)
+        self.assertGreater(report.diagnostic_score, 0.0)
+        self.assertIn("Production readiness is 0/100", report.status_message)
         # No 30-point deduction for staging protection
         noindex_deductions = [d for d in report.all_deductions if "noindex" in d.reason.lower() or "SITEWIDE" in d.rule_title]
         self.assertEqual(len(noindex_deductions), 0)
@@ -1375,6 +1378,258 @@ class TestSEOAuditEngine(unittest.TestCase):
         self.assertIn("components/MetaHead.tsx", md)
         self.assertIn("```diff", md)
         self.assertIn("```python", md)
+
+    # Scenario 45: Healthy Indexable Site Ready for Search
+    def test_scenario_45_healthy_indexable_site_ready_for_search(self):
+        from godlike_seo.models import IndexabilityStatus, CanonicalState
+        p1 = PageData(
+            url="https://example.com/",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Authoritative Example Homepage",
+            meta_description="Comprehensive guide to example architecture and technical implementations.",
+            canonical_url="https://example.com/",
+            canonical_state=CanonicalState.SELF_REFERENCING,
+            headings=[HeadingData(level=1, text="Main Page Topic")],
+            word_count=500,
+            has_viewport=True,
+            robots_txt_status="ALLOWED",
+            http_headers={"strict-transport-security": "max-age=31536000"},
+        )
+        p2 = PageData(
+            url="https://example.com/docs",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Complete Documentation Guide",
+            meta_description="Detailed reference documentation for developers and operators.",
+            canonical_url="https://example.com/docs",
+            canonical_state=CanonicalState.SELF_REFERENCING,
+            headings=[HeadingData(level=1, text="Documentation Outline")],
+            word_count=600,
+            has_viewport=True,
+            robots_txt_status="ALLOWED",
+            http_headers={"strict-transport-security": "max-age=31536000"},
+        )
+        p1.internal_links = [LinkData(href="https://example.com/docs", anchor_text="Documentation")]
+        p2.internal_links = [LinkData(href="https://example.com/", anchor_text="Home")]
+
+        crawl = CrawlResult(start_url="https://example.com/", domain="example.com", pages=[p1, p2], pages_discovered_count=2, crawl_coverage_pct=100.0)
+        report = self.report_gen.generate_report(crawl, environment="production")
+
+        self.assertEqual(report.audit_status, "PASS")
+        self.assertEqual(report.overall_score, 100.0)
+        self.assertEqual(len(report.all_deductions), 0)
+
+    # Scenario 46: Robots.txt Disallow Interaction with Noindex (Requirement 1 & Regression)
+    def test_scenario_46_robots_txt_disallow_stops_noindex_detection(self):
+        page = PageData(
+            url="https://example.com/disallowed-with-noindex",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            robots_txt_status="DISALLOWED",
+            meta_robots="noindex, nofollow",
+        )
+        issues = self.detector._check_robots_and_snippets(page)
+        issue_ids = [i.issue_id for i in issues]
+        self.assertIn("ROBOTS_BLOCKS_NOINDEX_DETECTION", issue_ids)
+        noindex_issue = next(i for i in issues if i.issue_id == "ROBOTS_BLOCKS_NOINDEX_DETECTION")
+        self.assertIn("prevents search engines from crawling the page to read the", noindex_issue.inference)
+
+    # Scenario 47: JavaScript Rendered vs Raw HTML Metadata (Requirement 2 & Regression)
+    def test_scenario_47_javascript_rendered_vs_raw_html_metadata(self):
+        page = PageData(
+            url="https://example.com/spa-app",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            raw_title="",
+            rendered_title="Client Rendered React Dashboard Title",
+            title="Client Rendered React Dashboard Title",
+            render_status="rendered_playwright",
+            headings=[HeadingData(level=1, text="Dashboard")],
+        )
+        issues = self.detector._check_title(page, title_map={})
+        issue_ids = [i.issue_id for i in issues]
+        self.assertIn("TITLE_CLIENT_SIDE_RENDERED", issue_ids)
+        self.assertNotIn("MISSING_TITLE_TAG", issue_ids)
+        js_issue = next(i for i in issues if i.issue_id == "TITLE_CLIENT_SIDE_RENDERED")
+        self.assertEqual(js_issue.finding_source, "both")
+
+    # Scenario 48: Canonical Target End-to-End Validation (Requirement 3 & Regression)
+    def test_scenario_48_canonical_target_end_to_end_validation(self):
+        from godlike_seo.models import CanonicalState
+        # Page A -> canonical to 404
+        page_a = PageData(
+            url="https://example.com/page-a",
+            canonical_url="https://example.com/broken-target",
+            canonical_state=CanonicalState.CROSS_URL,
+            status_code=200,
+            has_html=True,
+        )
+        # Page B -> canonical to 301 redirect
+        page_b = PageData(
+            url="https://example.com/page-b",
+            canonical_url="https://example.com/redirect-target",
+            canonical_state=CanonicalState.CROSS_URL,
+            status_code=200,
+            has_html=True,
+        )
+        # Page C -> canonical to noindexed page
+        page_c = PageData(
+            url="https://example.com/page-c",
+            canonical_url="https://example.com/noindex-target",
+            canonical_state=CanonicalState.CROSS_URL,
+            status_code=200,
+            has_html=True,
+        )
+        # Page D & E -> reciprocal canonical loop (D -> E and E -> D)
+        page_d = PageData(
+            url="https://example.com/loop-d",
+            canonical_url="https://example.com/loop-e",
+            canonical_state=CanonicalState.CROSS_URL,
+            status_code=200,
+            has_html=True,
+        )
+        page_e = PageData(
+            url="https://example.com/loop-e",
+            canonical_url="https://example.com/loop-d",
+            canonical_state=CanonicalState.CROSS_URL,
+            status_code=200,
+            has_html=True,
+        )
+        # Targets
+        target_404 = PageData(url="https://example.com/broken-target", status_code=404, has_html=False)
+        target_301 = PageData(url="https://example.com/redirect-target", status_code=301, final_url="https://example.com/destination", has_html=False)
+        target_noindex = PageData(url="https://example.com/noindex-target", status_code=200, meta_robots="noindex", has_html=True)
+
+        pages_by_url = {
+            "https://example.com/broken-target": target_404,
+            "https://example.com/redirect-target": target_301,
+            "https://example.com/noindex-target": target_noindex,
+            "https://example.com/loop-d": page_d,
+            "https://example.com/loop-e": page_e,
+        }
+
+        # Check A
+        issues_a = self.detector._check_canonical(page_a, pages_by_url)
+        self.assertIn("CANONICAL_POINTS_TO_4XX", [i.issue_id for i in issues_a])
+
+        # Check B
+        issues_b = self.detector._check_canonical(page_b, pages_by_url)
+        self.assertIn("CANONICAL_POINTS_TO_REDIRECT", [i.issue_id for i in issues_b])
+
+        # Check C
+        issues_c = self.detector._check_canonical(page_c, pages_by_url)
+        self.assertIn("CANONICAL_POINTS_TO_NOINDEX", [i.issue_id for i in issues_c])
+
+        # Check D (Loop)
+        issues_d = self.detector._check_canonical(page_d, pages_by_url)
+        self.assertIn("CANONICAL_TARGET_LOOP", [i.issue_id for i in issues_d])
+
+    # Scenario 49: Partial Crawl Inconclusive Ledger Checks (Requirement 4 & Regression)
+    def test_scenario_49_partial_crawl_inconclusive_ledger_checks(self):
+        from godlike_seo.models import CheckStatus
+        pages = [
+            PageData(
+                url=f"https://example.com/page-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                title=f"Sample Page {i}",
+                headings=[HeadingData(level=1, text=f"Heading {i}")],
+                meta_description="Sample description meeting normal length requirements for the page.",
+                word_count=400,
+                has_viewport=True,
+            )
+            for i in range(2)
+        ]
+        crawl = CrawlResult(
+            start_url="https://example.com/",
+            pages=pages,
+            pages_discovered_count=50,
+            crawl_coverage_pct=4.0,
+        )
+        report = self.report_gen.generate_report(crawl)
+        self.assertEqual(report.audit_status, "INSUFFICIENT_COVERAGE")
+        inconclusive_checks = [c for c in report.check_ledger if c.status == CheckStatus.INCONCLUSIVE]
+        self.assertGreaterEqual(len(inconclusive_checks), 20)
+
+    # Scenario 50: Temporary Server Error 503 Graceful Handling (Regression)
+    def test_scenario_50_temporary_server_error_503_graceful_handling(self):
+        page_503 = PageData(
+            url="https://example.com/failing-endpoint",
+            status_code=503,
+            has_html=False,
+            page_type=PageType.ERROR,
+        )
+        issues = self.detector._check_http_status(page_503)
+        self.assertIn("HTTP_5XX_SERVER_ERROR", [i.issue_id for i in issues])
+
+    # Scenario 51: Unknown Environment Strict Isolation (Requirement 4 & Regression)
+    def test_scenario_51_unknown_environment_strict_isolation(self):
+        # Host contains 'staging' substring, but environment is UNKNOWN and no headers exist
+        pages = [
+            PageData(
+                url=f"https://staging.customer-app.com/page-{i}",
+                status_code=200,
+                has_html=True,
+                page_type=PageType.PUBLIC_CONTENT,
+                meta_robots="noindex",
+                title=f"Page {i}",
+                headings=[HeadingData(level=1, text=f"Heading {i}")],
+            )
+            for i in range(3)
+        ]
+        crawl = CrawlResult(
+            start_url="https://staging.customer-app.com/",
+            domain="staging.customer-app.com",
+            pages=pages,
+            pages_discovered_count=3,
+            crawl_coverage_pct=100.0,
+        )
+        # With environment=None or "unknown"
+        report = self.report_gen.generate_report(crawl, environment="unknown")
+        # Must NOT infer staging from hostname alone; must alert with INDEXATION_WARNING
+        self.assertEqual(report.audit_status, "INDEXATION_WARNING")
+        self.assertEqual(report.environment_intent, "unknown")
+        self.assertIn("ENVIRONMENT UNCONFIRMED", report.status_message)
+
+    # Scenario 52: Schema Optional Property Zero Point Deduction (Requirement 9)
+    def test_scenario_52_schema_optional_property_zero_penalty(self):
+        from godlike_seo.analyzers.schema_validator import SchemaValidator
+        from godlike_seo.models import StructuredDataItem
+        page = PageData(
+            url="https://example.com/product/valid-item",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            title="Valid Product Item",
+            meta_description="Valid product item description meeting standards.",
+            headings=[HeadingData(level=1, text="Product Name")],
+            structured_data=[
+                StructuredDataItem(
+                    format="json-ld",
+                    type="Product",
+                    data={
+                        "@context": "https://schema.org",
+                        "@type": "Product",
+                        "name": "Super Camera 4K",
+                        "offers": {
+                            "@type": "Offer",
+                            "price": "99.00",
+                            "priceCurrency": "USD",
+                        },
+                    },
+                )
+            ],
+        )
+        validator = SchemaValidator()
+        issues = validator.validate_page(page)
+        # Missing recommended brand, sku should be INFORMATIONAL, not causing score penalties
+        self.assertTrue(all(i.severity == IssueSeverity.INFORMATIONAL for i in issues))
 
 
 if __name__ == "__main__":
