@@ -116,6 +116,7 @@ class KeywordResearchTests(unittest.TestCase):
             competitor_analysis=analysis,
         )
         filepath = Path(__file__).parents[1] / "reports" / "_test_keyword_report.xlsx"
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         try:
             ExcelReportGenerator().generate(report, filepath)
             workbook = load_workbook(filepath, read_only=True, data_only=True)
@@ -136,6 +137,7 @@ class KeywordResearchTests(unittest.TestCase):
 
     def test_keyword_file_reads_keyword_plan_header(self):
         filepath = Path(__file__).parents[1] / "reports" / "_test_keyword_plan.xlsx"
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         try:
             workbook = OpenpyxlWorkbook()
             sheet = workbook.active

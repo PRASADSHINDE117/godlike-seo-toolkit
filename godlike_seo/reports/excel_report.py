@@ -12,10 +12,11 @@ Creates structured .xlsx workbooks with:
 
 from __future__ import annotations
 
+from pathlib import Path
+from urllib.parse import urlparse
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from urllib.parse import urlparse
 
 from godlike_seo.models import IssueSeverity, SEOReport
 
@@ -501,4 +502,5 @@ class ExcelReportGenerator:
 
             self._apply_table_styling(ws_ledger, 1, 6)
 
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
         wb.save(filepath)
