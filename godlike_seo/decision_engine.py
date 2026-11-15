@@ -108,25 +108,15 @@ class RemediationPlan:
             f"> [!IMPORTANT]\n> **Execution Summary:** {self.agent_remediation_summary}\n",
         ]
         for task in self.tasks:
-            diff_block = (
-                task.code_diff_solution
-                if task.code_diff_solution.startswith("```")
-                else f"```diff\n{task.code_diff_solution}\n```"
-            )
-            pw_block = (
-                task.playwright_test_code
-                if task.playwright_test_code.startswith("```")
-                else f"```python\n{task.playwright_test_code}\n```"
-            )
             lines.extend([
                 f"## [{task.priority}] {task.title} (`{task.task_id}`)",
                 f"- **Target Component:** `{task.target_component}`",
                 f"- **Affected Scope:** {task.affected_urls_count} page(s) (Sample: `{task.sample_url}`)",
                 f"- **Problem Statement:** {task.problem_statement}\n",
                 "### 🛠️ Proposed Drop-In Code Patch",
-                f"{diff_block}\n",
+                f"```diff\n{task.code_diff_solution}\n```\n",
                 "### 🧪 Automated Playwright Verification Test",
-                f"{pw_block}\n",
+                f"```python\n{task.playwright_test_code}\n```\n",
                 f"**Git Commit Proposal:** `{task.git_commit_proposal}`\n",
                 "---\n",
             ])

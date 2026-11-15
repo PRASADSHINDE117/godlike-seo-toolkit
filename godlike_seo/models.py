@@ -176,17 +176,31 @@ class ImageData(DictCompatible):
     is_above_fold: bool = False
     is_decorative: bool = False
     dom_snippet: str = ""
+    url: Optional[str] = None
+    size_bytes: Optional[int] = None
 
     _aliases = {
         "content_length": "file_size",
         "has_srcset": "srcset",
+        "url": "src",
+        "size_bytes": "file_size",
     }
 
     def __post_init__(self):
+        if self.url and not self.src:
+            self.src = self.url
+        elif self.src and not self.url:
+            self.url = self.src
+        if self.size_bytes and not self.file_size:
+            self.file_size = self.size_bytes
+        elif self.file_size and not self.size_bytes:
+            self.size_bytes = self.file_size
         if self.file_size and not self.size:
             self.size = self.file_size
         elif self.size and not self.file_size:
             self.file_size = self.size
+        if self.size and not self.size_bytes:
+            self.size_bytes = self.size
         if self.loading == "lazy":
             self.is_lazy_loaded = True
 

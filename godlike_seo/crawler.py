@@ -1039,11 +1039,22 @@ class SEOCrawler:
 
                 tasks = [asyncio.create_task(worker()) for _ in range(self.config.concurrency)]
 
-                while not self._queue.empty():
-                    async with self._crawl_lock:
-                        if len(self._crawled_pages) >= self.config.max_pages:
-                            break
-                    await asyncio.sleep(0.1)
+                async def monitor_max_pages():
+                    while True:
+                        async with self._crawl_lock:
+                            if len(self._crawled_pages) >= self.config.max_pages:
+                                return
+                        await asyncio.sleep(0.1)
+
+                join_task = asyncio.create_task(self._queue.join())
+                max_task = asyncio.create_task(monitor_max_pages())
+
+                done, pending = await asyncio.wait(
+                    [join_task, max_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
 
                 # Drain remaining items in queue if max_pages reached
                 while not self._queue.empty():

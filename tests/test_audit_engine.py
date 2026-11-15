@@ -1166,15 +1166,15 @@ class TestSEOAuditEngine(unittest.TestCase):
             page_type=PageType.PUBLIC_CONTENT,
             images=[
                 # 0. Hero image with loading="lazy" (Anti-pattern)
-                ImageData(src="https://example.com/hero.jpg", alt="Hero Banner", loading="lazy", width=1200, height=600),
+                ImageData(url="https://example.com/hero.jpg", src="https://example.com/hero.jpg", alt="Hero Banner", loading="lazy", width=1200, height=600),
                 # 1. Missing alt attribute
-                ImageData(src="https://example.com/missing-alt.png", alt=None, width=400, height=300),
+                ImageData(url="https://example.com/missing-alt.png", src="https://example.com/missing-alt.png", alt=None, width=400, height=300),
                 # 2. Generic placeholder alt
-                ImageData(src="https://example.com/generic.jpg", alt="image", width=300, height=200),
+                ImageData(url="https://example.com/generic.jpg", src="https://example.com/generic.jpg", alt="image", width=300, height=200),
                 # 3. Missing dimensions (CLS risk)
-                ImageData(src="https://example.com/no-dimensions.png", alt="Valid Alt Text", width=None, height=None),
+                ImageData(url="https://example.com/no-dimensions.png", src="https://example.com/no-dimensions.png", alt="Valid Alt Text", width=0, height=0),
                 # 4. Critically oversized image (>1MB)
-                ImageData(src="https://example.com/huge.png", alt="Huge Graphic", file_size=2_500_000, width=1920, height=1080),
+                ImageData(url="https://example.com/huge.png", src="https://example.com/huge.png", alt="Huge Graphic", size_bytes=2_500_000, width=1920, height=1080),
             ]
         )
         analyzer = ImageAnalyzer()

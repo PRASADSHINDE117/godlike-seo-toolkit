@@ -503,4 +503,9 @@ class ExcelReportGenerator:
             self._apply_table_styling(ws_ledger, 1, 6)
 
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        wb.save(filepath)
+        try:
+            wb.save(filepath)
+        except PermissionError:
+            import time
+            alt_path = Path(filepath).with_name(f"{Path(filepath).stem}_{int(time.time())}.xlsx")
+            wb.save(alt_path)
