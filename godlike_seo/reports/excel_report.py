@@ -7,7 +7,7 @@ Creates structured .xlsx workbooks with:
 - Tab 3: All Evaluated Pages & Metrics
 - Tab 4: Orphaned Pages Audit
 - Tab 5: Internal Link Graph & Anchor Text
-- Tab 6: SERP Competitor Benchmarking
+- Tab 6: SERP Competitor Rankings & Page Metadata (when keyword analysis is requested)
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from urllib.parse import urlparse
 
 from godlike_seo.models import IssueSeverity, SEOReport
 
@@ -314,7 +315,114 @@ class ExcelReportGenerator:
         self._apply_table_styling(ws_links, 1, 5)
 
         # ---------------------------------------------------------------
-        # TAB 6: AI Agent Remediation Tasks
+        # TAB 6: Search Results & Competitor Page Metadata
+        # ---------------------------------------------------------------
+        competitor_analyses = report.competitor_analyses or (
+            [report.competitor_analysis] if report.competitor_analysis else []
+        )
+        if competitor_analyses:
+            ws_serp = wb.create_sheet(title="SERP Competitors")
+            ws_serp["A1"] = "SERP Results & Competitor Page Metadata"
+            ws_serp["A1"].font = self.title_font
+            ws_serp["A2"] = (
+                "Positions are the captured order from the named search provider for the requested market/language. "
+                "They are a point-in-time snapshot, not a stable or personalized Google ranking guarantee. "
+                "Blank metadata means the page fetch did not return that field; check Fetch Status."
+            )
+            ws_serp["A2"].alignment = Alignment(wrap_text=True, vertical="top")
+            ws_serp.merge_cells("A2:S2")
+            headers_serp = [
+                "Keyword", "Search Provider", "Country Target", "Language", "Captured At (UTC)",
+                "Observed Position", "Target / Competitor", "Domain", "Ranking URL",
+                "SERP Result Title", "Fetched <title>", "Meta Description", "H1", "SERP Snippet",
+                "Fetch Status", "HTTP Status", "Word Count", "Heading Count", "Structured Data",
+            ]
+            for c_idx, header in enumerate(headers_serp, start=1):
+                cell = ws_serp.cell(row=4, column=c_idx, value=header)
+                cell.font = self.header_font
+                cell.fill = self.header_fill
+
+            row_idx = 5
+            for analysis in competitor_analyses:
+                metrics_by_url = {
+                    (metric.url or "").rstrip("/").casefold(): metric
+                    for metric in analysis.competitors
+                }
+                target_metrics = analysis.your_metrics
+                if target_metrics and target_metrics.url:
+                    metrics_by_url[target_metrics.url.rstrip("/").casefold()] = target_metrics
+
+                observed_target = False
+                results = getattr(analysis, "serp_results", []) or []
+                for result in results:
+                    key = (result.url or "").rstrip("/").casefold()
+                    metric = metrics_by_url.get(key)
+                    result_host = urlparse(result.url).netloc.lower().removeprefix("www.")
+                    is_target = result_host == urlparse(analysis.your_url).netloc.lower().removeprefix("www.")
+                    observed_target = observed_target or is_target
+                    values = [
+                        analysis.keyword,
+                        analysis.search_engine,
+                        analysis.search_country,
+                        analysis.search_language,
+                        analysis.serp_retrieved_at or analysis.analysed_at,
+                        result.position,
+                        "Target site" if is_target else "Competitor",
+                        result.domain or result_host,
+                        result.url,
+                        result.title,
+                        metric.title if metric else "",
+                        metric.meta_description if metric else "",
+                        metric.h1 if metric else "",
+                        result.snippet,
+                        metric.fetch_status if metric else "not fetched",
+                        metric.http_status_code if metric else None,
+                        metric.word_count if metric else None,
+                        metric.heading_count if metric else None,
+                        "Yes" if metric and metric.has_structured_data else ("No" if metric and metric.fetch_status == "fetched" else ""),
+                    ]
+                    for c_idx, value in enumerate(values, start=1):
+                        cell = ws_serp.cell(row=row_idx, column=c_idx, value=value)
+                        cell.border = self.border
+                        cell.alignment = Alignment(vertical="top", wrap_text=True)
+                    row_idx += 1
+
+                if target_metrics and not observed_target:
+                    values = [
+                        analysis.keyword,
+                        analysis.search_engine,
+                        analysis.search_country,
+                        analysis.search_language,
+                        analysis.serp_retrieved_at or analysis.analysed_at,
+                        "Not in captured results",
+                        "Target site",
+                        target_metrics.domain,
+                        target_metrics.url or analysis.your_url,
+                        "",
+                        target_metrics.title,
+                        target_metrics.meta_description,
+                        target_metrics.h1,
+                        "",
+                        target_metrics.fetch_status,
+                        target_metrics.http_status_code,
+                        target_metrics.word_count,
+                        target_metrics.heading_count,
+                        "Yes" if target_metrics.has_structured_data else ("No" if target_metrics.fetch_status == "fetched" else ""),
+                    ]
+                    for c_idx, value in enumerate(values, start=1):
+                        cell = ws_serp.cell(row=row_idx, column=c_idx, value=value)
+                        cell.border = self.border
+                        cell.alignment = Alignment(vertical="top", wrap_text=True)
+                    row_idx += 1
+
+            for col_idx, width in enumerate([30, 18, 14, 12, 24, 18, 18, 28, 52, 48, 48, 55, 40, 55, 18, 14, 14, 16, 18], start=1):
+                ws_serp.column_dimensions[get_column_letter(col_idx)].width = width
+            ws_serp.freeze_panes = "A5"
+            ws_serp.auto_filter.ref = f"A4:S{max(4, row_idx - 1)}"
+            ws_serp.row_dimensions[2].height = 34
+
+        # ---------------------------------------------------------------
+        # TAB 7: AI Agent Remediation Tasks
         # ---------------------------------------------------------------
         plan = getattr(report, "remediation_plan", None)
         if plan and getattr(plan, "tasks", None):
@@ -356,7 +464,7 @@ class ExcelReportGenerator:
             self._apply_table_styling(ws_tasks, 1, 10)
 
         # ---------------------------------------------------------------
-        # TAB 7: Deterministic Check Execution Ledger
+        # TAB 8: Deterministic Check Execution Ledger
         # ---------------------------------------------------------------
         ledger = getattr(report, "check_ledger", [])
         if ledger:

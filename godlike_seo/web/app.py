@@ -202,13 +202,15 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         <div id="tab-serp" class="tab-content">
             <div class="header">
                 <h1>SERP Intelligence & Competitor Comparison</h1>
-                <p>Find the top 10 ranking websites on Google/DDG and discover exactly what gaps you need to close to rank #1.</p>
+                <p>Capture a point-in-time search snapshot and compare competitor page titles, descriptions, headings, and content. Results vary by provider, market, and time.</p>
             </div>
             <div class="card">
                 <h3>Benchmark Query</h3>
                 <div class="input-group">
                     <input type="text" id="serp-keyword" placeholder="e.g. best seo tools 2026" value="best seo audit tool">
                     <input type="url" id="serp-target" placeholder="Your URL (e.g. https://example.com)" value="https://example.com">
+                    <input type="text" id="serp-country" placeholder="Country code" value="in" maxlength="2" aria-label="Search country code">
+                    <input type="text" id="serp-language" placeholder="Language" value="en" maxlength="5" aria-label="Search language code">
                     <button onclick="runSerp()">Benchmark Competitors</button>
                 </div>
             </div>
@@ -222,12 +224,14 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         <div id="tab-keywords" class="tab-content">
             <div class="header">
                 <h1>Keyword Intent Explorer</h1>
-                <p>Google autocomplete expansion and intent categorization (Informational, Commercial, Transactional).</p>
+                <p>Autocomplete suggestions with intent grouping. Volume and difficulty fields are heuristic estimates, not monthly search counts or measured ranking difficulty.</p>
             </div>
             <div class="card">
                 <h3>Seed Keyword</h3>
                 <div class="input-group">
                     <input type="text" id="kw-seed" placeholder="e.g. technical seo" value="seo crawler">
+                    <input type="text" id="kw-country" placeholder="Country code" value="in" maxlength="2" aria-label="Suggestion country code">
+                    <input type="text" id="kw-language" placeholder="Language" value="en" maxlength="5" aria-label="Suggestion language code">
                     <button onclick="runKeywords()">Discover Long-Tail Keywords</button>
                 </div>
             </div>
@@ -290,10 +294,12 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         async function runSerp() {
             const kw = document.getElementById('serp-keyword').value;
             const target = document.getElementById('serp-target').value;
+            const country = document.getElementById('serp-country').value;
+            const language = document.getElementById('serp-language').value;
             const res = await fetch('/api/serp', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({keyword: kw, target_url: target})
+                body: JSON.stringify({keyword: kw, target_url: target, country, language})
             });
             const data = await res.json();
             document.getElementById('serp-results').style.display = 'block';
@@ -302,10 +308,12 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
         async function runKeywords() {
             const seed = document.getElementById('kw-seed').value;
+            const country = document.getElementById('kw-country').value;
+            const language = document.getElementById('kw-language').value;
             const res = await fetch('/api/keywords', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({seed: seed})
+                body: JSON.stringify({seed, country, language})
             });
             const data = await res.json();
             document.getElementById('kw-results').style.display = 'block';
@@ -404,8 +412,10 @@ def api_serp():
     payload = request.get_json() or {}
     kw = payload.get("keyword", "")
     target = payload.get("target_url", "")
+    country = str(payload.get("country", "in")).strip().lower()
+    language = str(payload.get("language", "en")).strip().lower()
 
-    analyzer = CompetitorAnalyzer()
+    analyzer = CompetitorAnalyzer(scraper=SERPScraper(country=country, language=language))
     comp = analyzer.analyze_for_keyword(target_keyword=kw, your_url=target)
 
     return jsonify(comp.to_dict())
@@ -415,16 +425,13 @@ def api_serp():
 def api_keywords():
     payload = request.get_json() or {}
     seed = payload.get("seed", "")
+    country = str(payload.get("country", "in")).strip().lower()
+    language = str(payload.get("language", "en")).strip().lower()
 
-    analyzer = KeywordAnalyzer()
+    analyzer = KeywordAnalyzer(country=country, language=language)
     opps = analyzer.expand_keyword(seed, max_results=25)
 
-    return jsonify([{
-        "keyword": o.keyword,
-        "intent": o.intent.value,
-        "relevance": o.relevance_score,
-        "content_type": o.suggested_content_type,
-    } for o in opps])
+    return jsonify([o.to_dict() for o in opps])
 
 
 if __name__ == "__main__":

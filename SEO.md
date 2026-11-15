@@ -145,7 +145,11 @@ python -m godlike_seo crawl <URL> [OPTIONS]
 | `--render-js` | | Enable selective headless Playwright JS rendering | `False` |
 | `--output` | `-o` | Specific destination file path | Auto |
 | `--output-dir` | | Directory to store generated reports | Current Dir |
-| `--keyword` | `-k` | Target search query to benchmark ranking against | `None` |
+| `--keyword` | `-k` | Search query to benchmark; repeat for multiple terms | None |
+| `--keyword-file` | | Read queries from the `Keyword Plan` sheet in a research workbook | None |
+| `--keyword-limit` | | Maximum benchmark queries from CLI/file inputs | `5` |
+| `--country` | | Search country code (`in`, `us`, etc.) | `in` |
+| `--language` | | Search language code | `en` |
 | `--auth-file` | | Path to credentials file (e.g. `user details/user info.txt`) | Auto-detect |
 | `--login-url` | | URL of the login form | `None` |
 | `--username` | `-u` | Login username or email | `None` |
@@ -164,9 +168,14 @@ python -m godlike_seo crawl https://example.com --format json --quiet
 # 3. Authenticated Crawl Behind Login Wall
 python -m godlike_seo crawl https://example.com --auth-file "user details/user info.txt"
 
-# 4. Crawl + Competitive Gap Analysis for a Target Search Query
-python -m godlike_seo crawl https://example.com -k "camping tent rental" --format md
+# 4. Crawl + competitor analysis for selected rental searches in India
+python -m godlike_seo crawl https://example.com -k "camping tent on rent India" -k "camera rental Bengaluru" --country in --language en --format all
+
+# 5. Read the prioritized queries from the research workbook into the same report
+python -m godlike_seo crawl https://example.com --keyword-file outputs/keyword_research_2026-11-15/tental_competitor_keyword_research.xlsx --keyword-limit 5 --country in --language en --format all
 ```
+
+When keyword inputs are provided, the Excel report adds a `SERP Competitors` tab with the captured provider position, search result title/snippet, fetched page `<title>`, meta description, H1, market/language, capture time, and page-fetch status. The report labels the search provider and snapshot scope; positions are not a lasting ranking guarantee. The workbook importer reads the `Target keyword / query` column from the research workbook's `Keyword Plan` tab.
 
 ---
 

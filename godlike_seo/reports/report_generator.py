@@ -152,7 +152,7 @@ RULE_CATALOG = [
         "category": IssueCategory.ON_PAGE,
         "title": "Image Alt Text Accessibility",
         "description": "Verifies that <img> elements include descriptive alt attributes for accessibility and Google Images.",
-        "issue_ids": {"IMAGE_MISSING_ALT"},
+        "issue_ids": {"IMAGE_MISSING_ALT", "IMAGE_LOW_QUALITY_ALT"},
     },
     {
         "rule_id": "ONPAGE-007",
@@ -268,6 +268,17 @@ RULE_CATALOG = [
         "description": "Checks that <img> elements declare explicit width and height attributes or CSS aspect-ratio to reserve layout space.",
         "issue_ids": {"IMAGE_MISSING_DIMENSIONS"},
     },
+    {
+        "rule_id": "PERF-002",
+        "category": IssueCategory.PERFORMANCE,
+        "title": "Image Weight & Core Web Vitals Optimization",
+        "description": "Evaluates image file weight, lazy-loading on LCP hero elements, and modern image format delivery.",
+        "issue_ids": {
+            "IMAGE_HERO_LAZY_LOADED",
+            "IMAGE_CRITICALLY_OVERSIZED",
+            "IMAGE_OVERSIZED_OPTIMIZATION_OPPORTUNITY",
+        },
+    },
 
     # Security & Standards
     {
@@ -313,6 +324,18 @@ RULE_CATALOG = [
         "title": "JSON-LD Syntax & Parsing Validity",
         "description": "Validates that declared JSON-LD script blocks are free of syntax errors and unescaped characters.",
         "issue_ids": {"INVALID_JSON_LD"},
+    },
+    {
+        "rule_id": "SCHEMA-003",
+        "category": IssueCategory.STRUCTURED_DATA,
+        "title": "Schema.org Rich Result Semantic Compliance",
+        "description": "Validates that declared structured data provides all required Google Search Central properties for rich snippet qualification.",
+        "issue_ids": {
+            "SCHEMA_MISSING_REQUIRED_PROPERTY",
+            "SCHEMA_INVALID_FAQ_STRUCTURE",
+            "SCHEMA_INVALID_BREADCRUMB_STRUCTURE",
+            "SCHEMA_MISSING_AUTHOR_NAME",
+        },
     },
 ]
 

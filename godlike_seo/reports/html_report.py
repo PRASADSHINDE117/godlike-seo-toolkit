@@ -332,10 +332,11 @@ class HTMLReportGenerator:
         comp_html = ""
         all_comps = report.competitor_analyses or ([report.competitor_analysis] if report.competitor_analysis else [])
         for comp_analysis in all_comps:
+            target_metrics = comp_analysis.your_metrics
             comp_html += f"""
             <div class="competitor-block">
                 <h3>Query Benchmark: "{html.escape(comp_analysis.keyword)}"</h3>
-                <p><strong>Your Ranking:</strong> #{comp_analysis.your_position or 'Unranked (>20)'} | <strong>Competitive Parity Score:</strong> {comp_analysis.competitive_gap_score}/100</p>
+                <p><strong>Your captured position:</strong> {html.escape(comp_analysis.position_label)} | <strong>Search:</strong> {html.escape(comp_analysis.search_engine)} ({html.escape(comp_analysis.search_country)}/{html.escape(comp_analysis.search_language)}) at {html.escape(comp_analysis.serp_retrieved_at or comp_analysis.analysed_at)} | <strong>Heuristic Gap Indicator:</strong> {comp_analysis.competitive_gap_score}/100 (not a rank forecast)</p>
                 <table class="data-table">
                     <thead>
                         <tr>
@@ -349,12 +350,12 @@ class HTMLReportGenerator:
                     </thead>
                     <tbody>
                         <tr class="target-row">
-                            <td><strong>YOU (#{comp_analysis.your_position or 'N/A'})</strong></td>
+                            <td><strong>YOU ({html.escape(comp_analysis.position_label)})</strong></td>
                             <td><code>{html.escape(comp_analysis.your_url)}</code></td>
-                            <td>{stats.get('average_word_count', 0)}</td>
-                            <td>{html.escape(comp_analysis.keyword if comp_analysis.your_position else 'Target Page')}</td>
-                            <td>{'Yes' if stats.get('has_schema') else 'No'}</td>
-                            <td>{avg_latency:.0f}ms</td>
+                            <td>{target_metrics.word_count if target_metrics else 'n/a'}</td>
+                            <td>{html.escape(target_metrics.h1) if target_metrics and target_metrics.h1 else 'None'}</td>
+                            <td>{'Yes' if target_metrics and target_metrics.has_structured_data else 'No data' if not target_metrics or target_metrics.fetch_status != 'fetched' else 'No'}</td>
+                            <td>{f'{target_metrics.response_time_ms:.0f}ms' if target_metrics else 'n/a'}</td>
                         </tr>
             """
             for c in comp_analysis.competitors:

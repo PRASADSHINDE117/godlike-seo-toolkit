@@ -23,7 +23,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote_plus, urlencode, urljoin, urlparse
 
@@ -45,7 +45,7 @@ MAX_DELAY = 5.0
 REQUEST_TIMEOUT = 15
 
 GOOGLE_SEARCH_URL = "https://www.google.com/search"
-GOOGLE_SUGGEST_URL = "http://suggestqueries.google.com/complete/search"
+GOOGLE_SUGGEST_URL = "https://suggestqueries.google.com/complete/search"
 DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/"
 
 # A realistic pool of desktop browser User-Agent strings (2024-2025 era).
@@ -90,7 +90,7 @@ class SERPPage:
     features: Optional[SERPFeatures] = None
     source: str = "google"  # "google" or "duckduckgo"
     total_results_estimated: int = 0
-    scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    scraped_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +138,11 @@ class SERPScraper:
         self.progress_callback = progress_callback
 
         self._session = requests.Session()
+        try:
+            import certifi
+            self._session.verify = certifi.where()
+        except Exception:
+            self._session.verify = True
         if proxy:
             self._session.proxies = {"http": proxy, "https": proxy}
 
@@ -357,6 +362,7 @@ class SERPScraper:
                     title=title,
                     snippet=snippet,
                     domain=domain,
+                    keyword=keyword,
                     is_featured=is_featured,
                 )
             )
@@ -475,6 +481,7 @@ class SERPScraper:
                         title=title,
                         snippet=snippet,
                         domain=domain,
+                        keyword=keyword,
                     )
                 )
                 position += 1
@@ -541,6 +548,7 @@ class SERPScraper:
                     title=title,
                     snippet=snippet,
                     domain=domain,
+                    keyword=keyword,
                 )
             )
             position += 1
@@ -615,10 +623,19 @@ class SERPScraper:
                     results=p.results,
                     total_results=len(p.results),
                     search_engine=p.source,
+                    search_language=self.language,
+                    search_country=self.country,
                     people_also_ask=p.features.people_also_ask if p.features else [],
                     related_searches=p.features.related_searches if p.features else [],
                 )
-            return SERPAnalysis(keyword=str(keywords), results=[], total_results=0)
+            return SERPAnalysis(
+                keyword=str(keywords),
+                results=[],
+                total_results=0,
+                search_engine="unavailable",
+                search_language=self.language,
+                search_country=self.country,
+            )
 
         return pages
 
@@ -682,7 +699,7 @@ class SERPScraper:
                 self._db_conn.execute(
                     """INSERT INTO search_volume_estimates
                        (keyword, score, rank, fetched_at) VALUES (?, ?, ?, ?)""",
-                    (kw, score, rank if rank >= 0 else None, datetime.utcnow().isoformat()),
+                    (kw, score, rank if rank >= 0 else None, datetime.now(timezone.utc).isoformat()),
                 )
                 self._db_conn.commit()
 
@@ -696,6 +713,7 @@ class SERPScraper:
             "client": "firefox",  # returns JSON
             "q": keyword,
             "hl": self.language,
+            "gl": self.country,
         }
         text = self._get(GOOGLE_SUGGEST_URL, params=params)
         if not text:
@@ -719,7 +737,8 @@ class SERPScraper:
             results=page.results,
             total_results=len(page.results),
             search_engine=page.source,
-            language=self.language,
+            search_language=self.language,
+            search_country=self.country,
         )
 
     # ------------------------------------------------------------------

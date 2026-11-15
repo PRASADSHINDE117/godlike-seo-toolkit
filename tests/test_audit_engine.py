@@ -1154,6 +1154,228 @@ class TestSEOAuditEngine(unittest.TestCase):
         data = res.get_json()
         self.assertIsInstance(data, list)
 
+    # Scenario 38: Dedicated Image SEO & Performance Diagnostics
+    def test_scenario_38_image_analyzer_deep_diagnostics(self):
+        from godlike_seo.analyzers.image_analyzer import ImageAnalyzer
+        from godlike_seo.models import ImageData
+
+        page = PageData(
+            url="https://example.com/gallery",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            images=[
+                # 0. Hero image with loading="lazy" (Anti-pattern)
+                ImageData(src="https://example.com/hero.jpg", alt="Hero Banner", loading="lazy", width=1200, height=600),
+                # 1. Missing alt attribute
+                ImageData(src="https://example.com/missing-alt.png", alt=None, width=400, height=300),
+                # 2. Generic placeholder alt
+                ImageData(src="https://example.com/generic.jpg", alt="image", width=300, height=200),
+                # 3. Missing dimensions (CLS risk)
+                ImageData(src="https://example.com/no-dimensions.png", alt="Valid Alt Text", width=None, height=None),
+                # 4. Critically oversized image (>1MB)
+                ImageData(src="https://example.com/huge.png", alt="Huge Graphic", file_size=2_500_000, width=1920, height=1080),
+            ]
+        )
+        analyzer = ImageAnalyzer()
+        res = analyzer.analyze([page])
+        issue_ids = [i.issue_id for i in res["issues"]]
+
+        self.assertIn("IMAGE_HERO_LAZY_LOADED", issue_ids)
+        self.assertIn("IMAGE_MISSING_ALT", issue_ids)
+        self.assertIn("IMAGE_LOW_QUALITY_ALT", issue_ids)
+        self.assertIn("IMAGE_MISSING_DIMENSIONS", issue_ids)
+        self.assertIn("IMAGE_CRITICALLY_OVERSIZED", issue_ids)
+
+    # Scenario 39: Deep Schema.org Validation against Google Rich Results Rules
+    def test_scenario_39_schema_validator_google_rich_results(self):
+        from godlike_seo.analyzers.schema_validator import SchemaValidator
+        from godlike_seo.models import StructuredDataItem
+
+        # 1. Product schema missing offers/review
+        page_product = PageData(
+            url="https://example.com/product/shoes",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            structured_data=[
+                StructuredDataItem(
+                    format="json-ld",
+                    type="Product",
+                    data={"@type": "Product", "name": "Running Shoes"},
+                    is_valid=True,
+                )
+            ]
+        )
+        validator = SchemaValidator()
+        issues_prod = validator.validate_page(page_product)
+        self.assertTrue(any(i.issue_id == "SCHEMA_MISSING_REQUIRED_PROPERTY" for i in issues_prod))
+        self.assertTrue(any("offers" in i.title for i in issues_prod))
+
+        # 2. FAQPage schema with malformed Question structure
+        page_faq = PageData(
+            url="https://example.com/faq",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            structured_data=[
+                StructuredDataItem(
+                    format="json-ld",
+                    type="FAQPage",
+                    data={"@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is this?"}]},
+                    is_valid=True,
+                )
+            ]
+        )
+        issues_faq = validator.validate_page(page_faq)
+        self.assertTrue(any(i.issue_id == "SCHEMA_INVALID_FAQ_STRUCTURE" for i in issues_faq))
+
+        # 3. Valid Article with author entity
+        page_article = PageData(
+            url="https://example.com/blog/seo-guide",
+            status_code=200,
+            has_html=True,
+            page_type=PageType.PUBLIC_CONTENT,
+            structured_data=[
+                StructuredDataItem(
+                    format="json-ld",
+                    type="Article",
+                    data={
+                        "@type": "Article",
+                        "headline": "Complete SEO Guide",
+                        "image": "https://example.com/img.jpg",
+                        "datePublished": "2026-01-01",
+                        "author": {"@type": "Person", "name": "Prasad Shinde"},
+                    },
+                    is_valid=True,
+                )
+            ]
+        )
+        issues_art = validator.validate_page(page_article)
+        self.assertFalse(any(i.issue_id == "SCHEMA_MISSING_REQUIRED_PROPERTY" for i in issues_art))
+
+    # Scenario 40: Multi-Dimensional Search Intent & Semantic Relevance
+    def test_scenario_40_keyword_intelligence_and_intent(self):
+        from godlike_seo.serp.keyword_analyzer import KeywordAnalyzer, SearchIntent
+
+        analyzer = KeywordAnalyzer()
+
+        # Intent classification check
+        intent_tx, conf_tx = analyzer.classify_intent("buy sony camera online discount")
+        self.assertEqual(intent_tx, SearchIntent.TRANSACTIONAL)
+        self.assertGreaterEqual(conf_tx, 0.85)
+
+        intent_comm, conf_comm = analyzer.classify_intent("best camera vs smartphone review 2026")
+        self.assertEqual(intent_comm, SearchIntent.COMMERCIAL)
+        self.assertGreaterEqual(conf_comm, 0.85)
+
+        intent_loc, conf_loc = analyzer.classify_intent("camera rental near me in bangalore")
+        self.assertEqual(intent_loc, SearchIntent.LOCAL)
+
+        intent_info, conf_info = analyzer.classify_intent("how to configure aperture and shutter speed")
+        self.assertEqual(intent_info, SearchIntent.INFORMATIONAL)
+
+        # Relevance scoring check: contiguous phrase gets higher score than tangential query
+        score_exact = analyzer.calculate_relevance("seo toolkit", "seo toolkit for python developers", rank_position=1)
+        score_tangent = analyzer.calculate_relevance("seo toolkit", "random python library tutorial", rank_position=8)
+        self.assertGreater(score_exact, score_tangent)
+
+        # Volume tier & KD check
+        vol, kd = analyzer.estimate_volume_and_difficulty("buy shoes", SearchIntent.TRANSACTIONAL, rank=1)
+        self.assertEqual(vol, "HIGH")
+        self.assertGreaterEqual(kd, 70.0)
+
+    # Scenario 41: Competitor Parity & Calibrated Ranking Probability
+    def test_scenario_41_competitor_parity_and_ranking_probability(self):
+        from godlike_seo.serp.competitor_analyzer import CompetitorAnalyzer
+        from godlike_seo.serp.serp_scraper import SERPAnalysis, SERPResult
+
+        # Mock SERP scraper with pre-configured results
+        class MockScraper:
+            def scrape(self, keyword, num_results=10):
+                return SERPAnalysis(
+                    keyword=keyword,
+                    results=[
+                        SERPResult(position=1, url="https://comp1.com/guide", title="Best Guide", snippet="", domain="comp1.com", keyword=keyword),
+                        SERPResult(position=2, url="https://comp2.com/guide", title="Top Guide", snippet="", domain="comp2.com", keyword=keyword),
+                    ],
+                    total_results=2,
+                    search_engine="google",
+                )
+
+        analyzer = CompetitorAnalyzer(scraper=MockScraper())
+        # Mock scrape page metrics to avoid live HTTP requests
+        analyzer._scrape_page_metrics = lambda url, kw: None
+        from godlike_seo.models import CompetitorMetrics
+        mock_your = CompetitorMetrics(domain="mybrand.com", url="https://mybrand.com/guide", word_count=1200, heading_count=6, keyword_in_title=True, keyword_in_h1=True, has_structured_data=True, response_time_ms=250.0)
+        mock_c1 = CompetitorMetrics(domain="comp1.com", url="https://comp1.com/guide", word_count=1000, heading_count=5, keyword_in_title=True, keyword_in_h1=True, has_structured_data=True, response_time_ms=300.0)
+        analyzer._scrape_page_metrics = lambda u, kw: mock_your if "mybrand.com" in u else mock_c1
+
+        analysis = analyzer.analyze_for_keyword("seo guide", your_url="https://mybrand.com/guide", max_competitors=1)
+        self.assertGreaterEqual(analysis.competitive_gap_score, 80.0)
+        self.assertGreaterEqual(analysis.ranking_probability_pct, 20.0)
+        self.assertEqual(analysis.parity_status, "HIGH_COMPETITIVE_PARITY")
+
+    # Scenario 42: Google Search Console Performance Intelligence
+    def test_scenario_42_google_search_console_integration(self):
+        from godlike_seo.integrations.search_console import GoogleSearchConsoleClient
+
+        client = GoogleSearchConsoleClient(enable_demo_mode=True)
+        report = client.fetch_search_analytics("https://mysite.example.com")
+
+        self.assertGreater(report.total_impressions, 0)
+        self.assertGreater(report.total_clicks, 0)
+        # Striking distance opportunities must be identified
+        self.assertGreater(len(report.striking_distance), 0)
+        for q in report.striking_distance:
+            self.assertGreaterEqual(q.position, 7.5)
+            self.assertLessEqual(q.position, 20.0)
+
+    # Scenario 43: Google PageSpeed Insights & Core Web Vitals
+    def test_scenario_43_pagespeed_insights_and_crux_vitals(self):
+        from godlike_seo.integrations.pagespeed import PageSpeedInsightsClient
+
+        client = PageSpeedInsightsClient()
+        cwv = client.run_audit("https://example.com")
+
+        self.assertIn(cwv.overall_status, ("PASS", "NEEDS_IMPROVEMENT", "POOR"))
+        self.assertGreater(cwv.performance_score, 0)
+        self.assertIsNotNone(cwv.lcp.value)
+        self.assertIsNotNone(cwv.cls.value)
+        self.assertIsNotNone(cwv.inp.value)
+        self.assertGreater(len(cwv.opportunities), 0)
+
+    # Scenario 44: AI Remediation Plan & Markdown Runbook Export
+    def test_scenario_44_ai_remediation_plan_export(self):
+        from godlike_seo.decision_engine import RemediationPlan, RemediationTask
+
+        plan = RemediationPlan(
+            domain="example.com",
+            generated_at="2026-11-15T00:00:00Z",
+            total_tasks=1,
+            tasks=[
+                RemediationTask(
+                    task_id="SEO-TASK-001",
+                    issue_id="MALFORMED_OG_URL",
+                    priority="P1",
+                    title="Malformed Open Graph URL",
+                    target_component="components/MetaHead.tsx",
+                    affected_urls_count=1,
+                    sample_url="https://example.com/p1",
+                    problem_statement="og:url declares /undefined",
+                    code_diff_solution="Replace undefined with page.canonicalUrl",
+                    playwright_test_code="async def test_og(page): pass",
+                    git_commit_proposal="fix(seo): correct og:url token",
+                )
+            ],
+            agent_remediation_summary="1 task ready for AI automated patching.",
+        )
+        md = plan.to_markdown()
+        self.assertIn("SEO-TASK-001", md)
+        self.assertIn("components/MetaHead.tsx", md)
+        self.assertIn("```diff", md)
+        self.assertIn("```python", md)
+
 
 if __name__ == "__main__":
     unittest.main()

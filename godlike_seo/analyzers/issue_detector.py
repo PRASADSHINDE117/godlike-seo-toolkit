@@ -935,72 +935,14 @@ class SEOIssueDetector:
         return issues
 
     # ------------------------------------------------------------------
-    # 7. Images (CLS & Alt Text, with Spacer & Decorative Filtering)
+    # 7. Images (Accessibility, CLS, Lazy-loading, and Performance)
     # ------------------------------------------------------------------
 
     def _check_images(self, page: PageData) -> List[SEOIssue]:
-        issues = []
-        seen_missing_alt_srcs = set()
-        seen_missing_dim_srcs = set()
-
-        for img in page.images:
-            src = (img.src or "").strip()
-            src_lower = src.lower()
-
-            # Skip decorative images, transparent 1x1 GIFs, tracking pixels, Next.js placeholders
-            if (
-                getattr(img, "is_decorative", False)
-                or src.startswith("data:image/gif;base64,R0lGODlhAQAB")
-                or "spacer.gif" in src_lower
-                or "pixel.gif" in src_lower
-                or "blank.gif" in src_lower
-                or "clear.gif" in src_lower
-                or (img.width == 1 and img.height == 1)
-                or "role=\"presentation\"" in (img.dom_snippet or "").lower()
-                or "aria-hidden=\"true\"" in (img.dom_snippet or "").lower()
-            ):
-                continue
-
-            # Missing alt attribute
-            if img.alt is None:
-                if src not in seen_missing_alt_srcs:
-                    seen_missing_alt_srcs.add(src)
-                    issues.append(SEOIssue(
-                        issue_id="IMAGE_MISSING_ALT",
-                        severity=IssueSeverity.LOW,
-                        category=IssueCategory.ON_PAGE,
-                        title="Image Missing Alt Attribute",
-                        description=f"Image {src[:60]} does not have an alt attribute.",
-                        affected_url=page.url,
-                        evidence=img.dom_snippet or f'<img src="{src}">',
-                        observation=f"Image element has no alt attribute defined.",
-                        inference="Assistive screen readers cannot announce image content; Google Images indexing is hindered.",
-                        impact="Harms image accessibility (WCAG 2.1) and prevents Google Image search indexing.",
-                        recommendation="Add a descriptive alt attribute, or alt=\"\" if purely decorative.",
-                        verification_step="Inspect <img> tag in DOM.",
-                        confidence=IssueConfidence.HIGH,
-                    ))
-
-            # Missing width/height (Advisory CLS Check)
-            if not img.width or not img.height:
-                if not src.startswith("data:image/") and src not in seen_missing_dim_srcs:
-                    seen_missing_dim_srcs.add(src)
-                    issues.append(SEOIssue(
-                        issue_id="IMAGE_MISSING_DIMENSIONS",
-                        severity=IssueSeverity.INFORMATIONAL,
-                        category=IssueCategory.PERFORMANCE,
-                        title="Image Missing Explicit Width/Height Attributes (Advisory CLS Check)",
-                        description=f"Image {src[:60]} lacks inline width and height HTML attributes.",
-                        affected_url=page.url,
-                        evidence=img.dom_snippet or f'<img src="{src}">',
-                        observation=f"Image tag ('{src[:40]}') lacks inline width and height HTML attributes. In static DOM analysis, CSS aspect-ratio or stylesheet layout rules cannot be determined without browser rendering.",
-                        inference="If CSS aspect-ratio is not declared in stylesheets, the browser cannot reserve layout space prior to asset load, risking Cumulative Layout Shift (CLS).",
-                        impact="May contribute to Cumulative Layout Shift (CLS) if layout space is unconstrained via CSS.",
-                        recommendation="Ensure CSS 'aspect-ratio' is declared on image wrappers, or provide explicit width and height HTML attributes to safeguard layout stability.",
-                        verification_step="Inspect layout stability in Chrome DevTools Performance panel or Lighthouse CLS audit.",
-                        confidence=IssueConfidence.LOW,
-                    ))
-        return issues
+        from godlike_seo.analyzers.image_analyzer import ImageAnalyzer
+        analyzer = ImageAnalyzer()
+        res = analyzer.analyze([page])
+        return res.get("issues", [])
 
     # ------------------------------------------------------------------
     # 8. Content Quality & Uniqueness
@@ -1083,7 +1025,7 @@ class SEOIssueDetector:
         return issues
 
     # ------------------------------------------------------------------
-    # 9. Structured Data (Reclassified as Opportunity)
+    # 9. Structured Data (Deep Schema.org Validation)
     # ------------------------------------------------------------------
 
     def _check_structured_data(self, page: PageData) -> List[SEOIssue]:
@@ -1104,21 +1046,9 @@ class SEOIssueDetector:
                 confidence=IssueConfidence.HIGH,
             ))
         else:
-            for item in page.structured_data:
-                if not item.is_valid:
-                    issues.append(SEOIssue(
-                        issue_id="INVALID_JSON_LD",
-                        severity=IssueSeverity.MEDIUM,
-                        category=IssueCategory.STRUCTURED_DATA,
-                        title="Syntax Error in JSON-LD Structured Data",
-                        description=f"JSON-LD block failed to parse: {item.error_message}",
-                        affected_url=page.url,
-                        evidence=item.raw[:150],
-                        impact="Googlebot will discard broken structured data and fail to generate rich snippets.",
-                        recommendation="Fix JSON formatting (trailing commas, unescaped quotes).",
-                        verification_step="Validate markup with schema.org validator.",
-                        confidence=IssueConfidence.HIGH,
-                    ))
+            from godlike_seo.analyzers.schema_validator import SchemaValidator
+            validator = SchemaValidator()
+            issues.extend(validator.validate_page(page))
         return issues
 
     # ------------------------------------------------------------------

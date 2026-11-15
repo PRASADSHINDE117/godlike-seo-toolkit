@@ -80,8 +80,14 @@ Or JSON:
 
 ### 5. SERP Intelligence & Competitor Benchmarking
 ```bash
-# Benchmark your page against top 10 Google/Bing rankings for a search query:
-python -m godlike_seo serp "custom leather boots" --compare https://yourwebsite.com/boots
+# Benchmark your page in the India/English search market:
+python -m godlike_seo serp "camera rental Bengaluru" --compare https://yourwebsite.com/cameras --country in --language en
+
+# Add multiple keyword snapshots and competitor page tags to the crawl workbook:
+python -m godlike_seo crawl https://yourwebsite.com -k "camera rental Bengaluru" -k "DSLR camera on rent India" --country in --language en --format all
+
+# Or load queries from the Keyword Plan tab of the supplied research workbook:
+python -m godlike_seo crawl https://yourwebsite.com --keyword-file outputs/keyword_research_2026-11-15/tental_competitor_keyword_research.xlsx --keyword-limit 5 --country in --language en --format all
 ```
 
 ### 6. Search Intent Keyword Research

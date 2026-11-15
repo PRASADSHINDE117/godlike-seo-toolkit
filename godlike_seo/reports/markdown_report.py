@@ -171,11 +171,12 @@ class MarkdownReportGenerator:
             lines.append("## 🏆 SERP Intelligence & Competitor Reverse-Engineering")
             for comp in all_comps:
                 lines.append(f"### Benchmark Query: \"{comp.keyword}\"")
-                lines.append(f"- **Your Position:** `#{comp.your_position or 'Unranked (>20)'}`")
-                lines.append(f"- **Competitive Parity Score:** `{comp.competitive_gap_score}/100`")
+                lines.append(f"- **Your Position:** `{comp.position_label}` ({comp.search_engine}, {comp.search_country}/{comp.search_language}; {comp.serp_retrieved_at or comp.analysed_at})")
+                lines.append(f"- **Heuristic Gap Indicator:** `{comp.competitive_gap_score}/100` (count-based diagnostic, not a rank forecast)")
                 lines.append("\n| Rank | Domain | Word Count | H1 Heading | Schema | Speed (HTTP RTT) |")
                 lines.append("| :---: | :--- | :---: | :--- | :---: | :---: |")
-                lines.append(f"| **YOU (#{comp.your_position or 'N/A'})** | `{comp.your_url}` | {stats.get('average_word_count', 0)} | Target Page | {'Yes' if stats.get('has_schema') else 'No'} | {avg_latency:.0f}ms |")
+                target = comp.your_metrics
+                lines.append(f"| **YOU ({comp.position_label})** | `{comp.your_url}` | {target.word_count if target else 'n/a'} | {(target.h1 if target else 'n/a').replace('|', '/')} | {'Yes' if target and target.has_structured_data else 'No data'} | {f'{target.response_time_ms:.0f}ms' if target else 'n/a'} |")
                 for c in comp.competitors:
                     h1_clean = c.h1[:35] + ("..." if len(c.h1) > 35 else "") if c.h1 else "None"
                     lines.append(f"| #{c.position} | `{c.domain}` | {c.word_count} | {h1_clean} | {'Yes' if c.has_structured_data else 'No'} | {c.response_time_ms:.0f}ms |")

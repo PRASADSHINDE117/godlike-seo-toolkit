@@ -12,7 +12,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="godlike-seo-toolkit",
-    version="3.3.1",
+    version="3.3.2",
     author="Godlike SEO Team",
     author_email="team@godlikeseo.dev",
     license="GPL-3.0-or-later",

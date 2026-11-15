@@ -648,7 +648,7 @@ class SERPResult(DictCompatible):
     domain: str = ""
     keyword: str = ""
     is_featured: bool = False
-    retrieved_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    retrieved_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -665,9 +665,11 @@ class SERPAnalysis(DictCompatible):
     results: List[SERPResult] = field(default_factory=list)
     total_results: int = 0
     search_engine: str = "google"
+    search_language: str = "en"
+    search_country: str = "us"
     people_also_ask: List[str] = field(default_factory=list)
     related_searches: List[str] = field(default_factory=list)
-    retrieved_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    retrieved_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
@@ -676,6 +678,9 @@ class CompetitorMetrics(DictCompatible):
     domain: str
     url: str = ""
     position: int = 0
+    fetch_status: str = "not_attempted"
+    http_status_code: Optional[int] = None
+    fetch_error: str = ""
     title: str = ""
     word_count: int = 0
     heading_count: int = 0
@@ -701,11 +706,27 @@ class CompetitorAnalysis(DictCompatible):
     keyword: str
     your_url: str
     your_position: int = 0
+    your_metrics: Optional[CompetitorMetrics] = None
     competitors: List[CompetitorMetrics] = field(default_factory=list)
     gaps: List[str] = field(default_factory=list)
     recommendations: List[str] = field(default_factory=list)
     competitive_gap_score: float = 0.0
-    analysed_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    ranking_probability_pct: float = 0.0
+    parity_status: str = "EVALUATED"
+    search_engine: str = "google"
+    search_language: str = "en"
+    search_country: str = "us"
+    serp_results: List[SERPResult] = field(default_factory=list)
+    serp_retrieved_at: str = ""
+    analysed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def position_label(self) -> str:
+        if self.your_position:
+            return f"#{self.your_position}"
+        if self.search_engine == "unavailable":
+            return "Position unavailable"
+        return f"Not found in captured top {len(self.serp_results)} {self.search_engine} results"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
